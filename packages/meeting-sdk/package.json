@@ -1,0 +1,64 @@
+{
+  "name": "@strevokit/meeting-sdk",
+  "version": "0.1.0",
+  "description": "Embed Strevokit meetings in your web product.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AgiliaIT/strevokit-meeting-sdk.git",
+    "directory": "packages/meeting-sdk"
+  },
+  "homepage": "https://github.com/AgiliaIT/strevokit-meeting-sdk/tree/main/packages/meeting-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/AgiliaIT/strevokit-meeting-sdk/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/index.js",
+    "dist/index.js.map",
+    "dist/index.d.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "docs"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "protocol:build": "npm --prefix ../signaling-protocol ci && npm --prefix ../signaling-protocol run build",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "api:check": "api-extractor run",
+    "api:update": "node scripts/build.mjs --update-api",
+    "check:surface": "node scripts/check-surface.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
+    "check:size": "node scripts/check-size.mjs",
+    "check:release": "node scripts/check-release.mjs",
+    "pack:smoke": "node scripts/pack-smoke.mjs",
+    "check:publish-hygiene": "node scripts/check-publish-hygiene.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@microsoft/api-extractor": "^7.59.0",
+    "@strevokit/signaling-protocol": "file:../signaling-protocol",
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.28.0",
+    "eslint": "^10.11.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^5.0.0"
+  }
+}

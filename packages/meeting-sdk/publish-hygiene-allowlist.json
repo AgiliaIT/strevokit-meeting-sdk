@@ -1,0 +1,143 @@
+[
+  {
+    "file": "dist/index.js*",
+    "rule": "internal-host/loopback",
+    "pattern": "LOOPBACK_HOSTS = (?:/\\* @__PURE__ \\*/ )?new Set\\(\\[\"localhost\", \"127\\.0\\.0\\.1\"\\]\\)",
+    "reason": "Documented local-development exception: realtimeUrl may use ws:// only for loopback hosts."
+  },
+  {
+    "file": "dist/index.js*",
+    "rule": "internal-host/loopback",
+    "pattern": "realtimeUrl must be wss://host\\[:port\\] \\(ws:// only for localhost\\)",
+    "reason": "User-facing validation message describing the loopback ws:// exception."
+  },
+  {
+    "file": "dist/index.js*",
+    "rule": "secret/credential-assignment",
+    "pattern": "TOKEN_SUBPROTOCOL_PREFIX = \"strevokit\\.join-token\\.\"",
+    "reason": "Public protocol constant (WebSocket subprotocol prefix), not a credential."
+  },
+  {
+    "file": "dist/index.d.ts",
+    "rule": "internal-host/loopback",
+    "pattern": "`localhost` and `127\\.0\\.0\\.1`\\. No path, query, or fragment\\.",
+    "reason": "Option documentation for the loopback ws:// exception."
+  },
+  {
+    "file": "README.md",
+    "rule": "internal-host/loopback",
+    "pattern": "Plain `ws://` is accepted only for `localhost` and$|^  `127\\.0\\.0\\.1`\\.$",
+    "reason": "README local-development note for the loopback ws:// exception."
+  },
+  {
+    "file": "docs/api-reference.md",
+    "rule": "internal-host/loopback",
+    "pattern": "`ws://` is accepted only for `localhost` and `127\\.0\\.0\\.1`",
+    "reason": "API reference option table for the loopback ws:// exception."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/src/createMeetingEngine.ts",
+    "rule": "internal-host/loopback",
+    "pattern": "LOOPBACK_HOSTS = new Set\\(\\[\"localhost\", \"127\\.0\\.0\\.1\"\\]\\)|realtimeUrl must be wss://host\\[:port\\] \\(ws:// only for localhost\\)",
+    "reason": "Documented local-development exception: realtimeUrl may use ws:// only for loopback hosts."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/src/public/types.ts",
+    "rule": "internal-host/loopback",
+    "pattern": "`localhost` and `127\\.0\\.0\\.1`\\. No path, query, or fragment\\.",
+    "reason": "Option documentation for the loopback ws:// exception."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/README.md",
+    "rule": "internal-host/loopback",
+    "pattern": "Plain `ws://` is accepted only for `localhost` and$|^  `127\\.0\\.0\\.1`\\.$",
+    "reason": "README local-development note for the loopback ws:// exception."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/docs/api-reference.md",
+    "rule": "internal-host/loopback",
+    "pattern": "`ws://` is accepted only for `localhost` and `127\\.0\\.0\\.1`",
+    "reason": "API reference option table for the loopback ws:// exception."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/tests/options.test.ts",
+    "rule": "internal-host/loopback",
+    "pattern": "(?:ws|http)://(?:localhost|127\\.0\\.0\\.1):8443",
+    "reason": "Tests for the loopback ws:// exception."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/src/internal/signalingSession.ts",
+    "rule": "secret/credential-assignment",
+    "pattern": "TOKEN_SUBPROTOCOL_PREFIX = \"strevokit\\.join-token\\.\"",
+    "reason": "Public protocol constant (WebSocket subprotocol prefix), not a credential."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/tests/support/fakeRealtime.ts",
+    "rule": "secret/credential-assignment",
+    "pattern": "TOKEN_PREFIX = \"strevokit\\.join-token\\.\"",
+    "reason": "The same public subprotocol prefix in the in-memory test server."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/signaling-protocol/*",
+    "rule": "internal-host/loopback",
+    "pattern": "IN IP4 127\\.0\\.0\\.1",
+    "reason": "Standard SDP origin line in synthetic test fixtures."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/signaling-protocol/src/conformance/sdp-fixtures.ts",
+    "rule": "internal-host/private-ipv4",
+    "pattern": "raddr 192\\.168\\.1\\.10",
+    "reason": "Synthetic host candidate in size-asserted SDP fixtures."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/signaling-protocol/src/conformance/sdp-fixtures.ts",
+    "rule": "internal-host/dev-port",
+    "pattern": "\"w0-screen\", 13001,",
+    "reason": "Synthetic media port in size-asserted SDP fixtures."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/scripts/check-publish-hygiene.mjs",
+    "rule": "internal-host/loopback",
+    "pattern": "name: \"loopback\", pattern: /.*/ \\},$",
+    "reason": "The scanner's own rule definition."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/scripts/check-publish-hygiene.mjs",
+    "rule": "internal-note/marker",
+    "pattern": "name: \"marker\", pattern: /.*/ \\},$",
+    "reason": "The scanner's own rule definition."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/scripts/check-publish-hygiene.mjs",
+    "rule": "internal-note/profanity",
+    "pattern": "name: \"profanity\", pattern: /.*/i \\},$",
+    "reason": "The scanner's own rule definition."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/publish-hygiene-allowlist.json",
+    "rule": "internal-host/loopback",
+    "pattern": "(?<=\\\\\"|only for |`|\\(\\?:)local[h]ost(?=\\\\\"|\\\\\\\\\\)|` and|\\|127)",
+    "reason": "The loopback ws:// exception patterns above quote the approved loopback text; other loopback mentions here are still flagged."
+  },
+  {
+    "scope": "tree",
+    "file": "packages/meeting-sdk/publish-hygiene-allowlist.json",
+    "rule": "internal-host/dev-port",
+    "pattern": "(?<=\\\\\"w0-screen\\\\\", )1300[1](?=,)",
+    "reason": "The SDP fixture pattern above quotes the synthetic media port; other dev ports here are still flagged."
+  }
+]

@@ -1,0 +1,140 @@
+# Checks every change to the SDK source: lint, types, tests, packaging, public surface, size, release readiness,
+# and publish hygiene across the whole repository. Never publishes; publishing is the release workflow's job.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            packages/signaling-protocol/package-lock.json
+            packages/meeting-sdk/package-lock.json
+      - run: bash ./scripts/ci/sdk.sh lint
+
+  static-analysis:
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            packages/signaling-protocol/package-lock.json
+            packages/meeting-sdk/package-lock.json
+      - run: bash ./scripts/ci/sdk.sh static-analysis
+
+  unit:
+    needs: [static-analysis]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            packages/signaling-protocol/package-lock.json
+            packages/meeting-sdk/package-lock.json
+      - run: bash ./scripts/ci/sdk.sh unit
+
+  integration:
+    needs: [unit]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            packages/signaling-protocol/package-lock.json
+            packages/meeting-sdk/package-lock.json
+      - run: bash ./scripts/ci/sdk.sh integration
+
+  build:
+    needs: [integration]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # check:release diffs the public API against the latest meeting-sdk-v* tag.
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            packages/signaling-protocol/package-lock.json
+            packages/meeting-sdk/package-lock.json
+      - run: bash ./scripts/ci/sdk.sh build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: meeting-sdk-size
+          path: packages/meeting-sdk/dist/size-report.json
+          if-no-files-found: warn
+
+  security:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            packages/signaling-protocol/package-lock.json
+            packages/meeting-sdk/package-lock.json
+      - run: bash ./scripts/ci/sdk.sh security
+
+  tree-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - run: node packages/meeting-sdk/scripts/check-publish-hygiene.mjs --tree .
+
+  ci:
+    name: ci
+    needs: [lint, static-analysis, unit, integration, build, security, tree-hygiene]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rollup required stages
+        run: |
+          set -euo pipefail
+          for pair in \
+            "lint:${{ needs.lint.result }}" \
+            "static-analysis:${{ needs.static-analysis.result }}" \
+            "unit:${{ needs.unit.result }}" \
+            "integration:${{ needs.integration.result }}" \
+            "build:${{ needs.build.result }}" \
+            "security:${{ needs.security.result }}" \
+            "tree-hygiene:${{ needs.tree-hygiene.result }}"; do
+            name="${pair%%:*}"
+            result="${pair##*:}"
+            echo "$name=$result"
+            if [ "$result" != "success" ]; then
+              echo "::error::Stage $name did not succeed ($result)"
+              exit 1
+            fi
+          done

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Meeting example</title>
+  </head>
+  <body>
+    <p id="status">Not joined</p>
+    <video id="preview" autoplay muted playsinline width="320"></video>
+    <div>
+      <button id="camera" disabled>Camera</button>
+      <button id="microphone" disabled>Microphone</button>
+      <button id="screen" disabled>Share screen</button>
+      <button id="leave" disabled>Leave</button>
+    </div>
+    <ul id="participants"></ul>
+
+    <script type="module">
+      // With a bundler, import from "@strevokit/meeting-sdk" instead.
+      import { createMeetingEngine, MeetingError } from "./node_modules/@strevokit/meeting-sdk/dist/index.js";
+
+      // Ask your backend for a join token; it calls the Strevokit API with its credential.
+      const { token } = await fetch("/my-backend/join-token", { method: "POST" }).then((r) => r.json());
+
+      const engine = createMeetingEngine({ token, realtimeUrl: "wss://realtime.example.com" });
+      const $ = (id) => document.getElementById(id);
+      const buttons = ["camera", "microphone", "screen", "leave"].map($);
+
+      function renderParticipants() {
+        $("participants").replaceChildren(
+          ...engine.participants.map((p) => {
+            const item = document.createElement("li");
+            const on = Object.entries(p.media).filter(([, enabled]) => enabled).map(([kind]) => kind);
+            item.textContent = `${p.displayName ?? p.id} (${p.role})${on.length ? ` - ${on.join(", ")}` : ""}`;
+            return item;
+          }),
+        );
+      }
+
+      engine.on("state_changed", ({ state }) => {
+        $("status").textContent = state;
+        for (const button of buttons) button.disabled = state !== "joined";
+      });
+      for (const type of ["joined", "participant_joined", "participant_left", "participant_media_changed"]) {
+        engine.on(type, renderParticipants);
+      }
+      engine.on("local_media_changed", ({ kind, enabled }) => {
+        if (kind === "camera") $("preview").srcObject = engine.localMedia.camera;
+        $(kind).setAttribute("aria-pressed", String(enabled));
+      });
+      engine.on("error", ({ error }) => alert(error.message));
+      engine.on("closed", ({ reason, error }) => {
+        $("status").textContent = error ? `Closed: ${error.message}` : `Closed (${reason})`;
+      });
+
+      async function run(action) {
+        try {
+          await action();
+        } catch (error) {
+          if (error instanceof MeetingError) alert(error.message);
+          else throw error;
+        }
+      }
+
+      $("camera").onclick = () => run(() => (engine.localMediaState.camera ? engine.disableCamera() : engine.enableCamera()));
+      $("microphone").onclick = () => run(() => (engine.localMediaState.microphone ? engine.mute() : engine.unmute()));
+      $("screen").onclick = () => run(() => (engine.localMediaState.screen ? engine.stopScreenShare() : engine.startScreenShare()));
+      $("leave").onclick = () => engine.leave();
+      window.addEventListener("pagehide", () => engine.dispose());
+
+      await run(() => engine.join());
+    </script>
+  </body>
+</html>
