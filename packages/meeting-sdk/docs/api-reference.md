@@ -55,12 +55,14 @@ interface MeetingEngine {
   readonly localMediaState: MediaState;
   readonly localMedia: LocalMedia;
 
+  remoteMedia(participantId: string): RemoteMedia;
+  mediaConnectionStatus(participantId: string): MediaConnectionStatus | null;
   join(): Promise<void>;
   leave(): Promise<void>;
-  enableCamera(): Promise<void>;
+  enableCamera(options?: MediaDeviceOptions): Promise<void>;
   disableCamera(): Promise<void>;
   mute(): Promise<void>;
-  unmute(): Promise<void>;
+  unmute(options?: MediaDeviceOptions): Promise<void>;
   startScreenShare(): Promise<void>;
   stopScreenShare(): Promise<void>;
   on<K extends MeetingEventType>(type: K, listener: MeetingEventListener<K>): () => void;
@@ -80,12 +82,20 @@ interface MeetingEngine {
 
 ### Methods
 
+| Method | Returns |
+|---|---|
+| `remoteMedia(participantId)` | The media currently received from that participant (`RemoteMedia`). Every field is `null` when nothing is available, including for unknown participants and before `joined`. |
+| `mediaConnectionStatus(participantId)` | The status of the audio and video connection to that participant (`MediaConnectionStatus`), or `null` when there is none. |
+
+Both are synchronous reads that never throw. They return the same values the `remote_media_changed` and
+`media_connection_changed` events last reported.
+
 | Method | Allowed in | Resolves when | Rejects with |
 |---|---|---|---|
 | `join()` | `idle` | Admitted to the meeting and the participant list is received. | `join_token_invalid`, `join_token_expired`, `origin_not_allowed`, `connection_failed`, `join_timeout`, `rate_limited`, `service_unavailable`, `session_replaced`, `meeting_ended`, `not_permitted`, `protocol_error`, `join_cancelled`, `unsupported_environment`, `already_joined` (in `connecting`, `joining`, `joined`, `leaving`), `engine_closed` (in `closed`) |
 | `leave()` | any state | In `idle`/`closed`: immediately. In `leaving`: with the in-flight leave. In `connecting`/`joining`: the join is cancelled (`join()` rejects with `join_cancelled`). In `joined`: when the platform confirms, or after 5 seconds. | never |
-| `enableCamera()` / `disableCamera()` | `joined` | The camera is on and announced / off and announced. | `not_joined`, `permission_denied`, `device_not_found`, `device_unavailable`, `unsupported_environment` |
-| `unmute()` / `mute()` | `joined` | The microphone is live and announced / silenced and announced. | same as the camera |
+| `enableCamera(options?)` / `disableCamera()` | `joined` | The camera is on and announced / off and announced. With `options.deviceId` while the camera is on: switched to that camera. | `not_joined`, `permission_denied`, `device_not_found`, `device_unavailable`, `unsupported_environment` |
+| `unmute(options?)` / `mute()` | `joined` | The microphone is live and announced / silenced and announced. With `options.deviceId` while unmuted: switched to that microphone. | same as the camera |
 | `startScreenShare()` / `stopScreenShare()` | `joined` | Screen sharing is on and announced / off and announced. | `not_joined`, `not_permitted` (checked before the browser prompt), `screen_share_cancelled`, `permission_denied`, `device_unavailable`, `unsupported_environment` |
 | `on(type, listener)` | any state | Returns an unsubscribe function. | never |
 | `dispose()` | any state | Releases devices, the connection, and listeners immediately. Emits nothing. Idempotent. A pending `join()` rejects with `join_cancelled`. | never |
@@ -103,6 +113,24 @@ Rules for every media method:
 
 Muting keeps the microphone open and silences it, so unmuting is instant. Turning the camera off or stopping a screen
 share releases the device.
+
+### Choosing a camera or microphone
+
+Pass a `deviceId` from `navigator.mediaDevices.enumerateDevices()` (`videoinput` for the camera, `audioinput` for the
+microphone) to `enableCamera()` or `unmute()`. Without one, the browser's default device is used, exactly as before.
+
+| State before | Call | Result |
+|---|---|---|
+| Off | `enableCamera({ deviceId })` | That camera turns on and the change is announced. |
+| On with the same device, or no `deviceId` given | `enableCamera(...)` | Nothing happens. |
+| On with another device | `enableCamera({ deviceId })` | **Switches in place**: other participants keep seeing video, nothing is announced, and `local_media_changed` fires with the new stream. The previous device is released. |
+| Muted, with another device kept open | `unmute({ deviceId })` | The chosen microphone is captured and announced; the previous one is released. |
+| Unmuted with another device | `unmute({ deviceId })` | Switches in place, as for the camera. |
+
+If the chosen device is missing, the call rejects with `device_not_found`; if another app is using it, with
+`device_unavailable`. Either way, the device already in use keeps running. A pending call is shared only by calls for
+the same state **and** the same device. Device IDs are never logged. Read the device in use from the track:
+`localMedia.camera?.getVideoTracks()[0]?.getSettings().deviceId`.
 
 ## States: `ConnectionState`
 
@@ -136,12 +164,42 @@ them. A listener that throws does not affect other listeners or the engine.
 | `participant_reconnected` | `{ participantId: string }` | Someone's connection was replaced (for example, they rejoined from another tab). |
 | `participant_media_changed` | `{ participantId: string; kind: MediaKind; enabled: boolean }` | Someone turned a capture on or off. Fires only for actual changes. |
 | `local_media_changed` | `{ kind: MediaKind; enabled: boolean; stream: MediaStream \| null }` | Your capture turned on or off. |
+| `remote_media_changed` | `{ participantId: string; kind: MediaKind; stream: MediaStream \| null }` | Media from another participant became available (`stream` set) or stopped being available (`stream` is `null`). |
+| `media_connection_changed` | `{ participantId: string; status: MediaConnectionStatus \| null }` | The audio and video connection to another participant changed status. `null` means there is no connection to them any more. |
 | `error` | `{ error: MeetingError }` | A problem that does not end the meeting (for example, a rejected action). |
 | `closed` | `{ reason: CloseReason; error?: MeetingError }` | The engine finished. Fires once. Not fired by `dispose()`. |
 
 **The event set is open.** New event types may be added in minor versions. Do not assume `MeetingEventMap` is closed
 (for example, with an exhaustive `switch` that fails on unknown types). `on()` delivers only the types you subscribe
 to, so new types never reach existing code.
+
+### Remote media guarantees
+
+1. **One event per change.** `remote_media_changed` fires exactly once each time `remoteMedia(id)[kind]` changes. For
+   one participant and kind, the `MediaStream` object stays the same while the connection lasts, so you can attach it
+   to an element once.
+2. **Clean departure.** `media_connection_changed` fires once per status change. When a participant leaves, you get a
+   `remote_media_changed` with `null` for each kind that was available, then a `media_connection_changed` with `null`
+   if they had a status, before `participant_left`.
+3. **Some meetings have no remote media yet.** In meetings whose media the platform delivers differently, this version
+   reports presence only: `remoteMedia()` is all `null`, `mediaConnectionStatus()` is `null`, and neither event fires.
+   Your code needs no change when a later version adds media there.
+4. **Device controls never change the connection status.** Turning your camera or microphone on or off never fires
+   `media_connection_changed`.
+5. **Leaving releases everything.** `leave()` and `dispose()` close every media connection and stop every received
+   track. After `leave()`, the matching `null` events fire before `closed`. After `dispose()`, nothing fires.
+6. **No connection details.** No event, error, or logger call contains connection negotiation details, network
+   addresses, or server credentials.
+
+```ts
+engine.on("remote_media_changed", ({ participantId, kind, stream }) => {
+  if (kind === "camera") videoFor(participantId).srcObject = stream;
+  if (kind === "microphone") audioFor(participantId).srcObject = stream;
+});
+engine.on("media_connection_changed", ({ participantId, status }) => {
+  showBadge(participantId, status === "interrupted" ? "Connection lost — reconnecting…" : status);
+});
+```
 
 ### `MeetingEventType`
 
@@ -190,6 +248,26 @@ being shared.
 
 `{ camera: MediaStream | null; microphone: MediaStream | null; screen: MediaStream | null }`. `null` when that capture
 is off.
+
+### `MediaDeviceOptions`
+
+`{ deviceId?: string }`. Which camera or microphone `enableCamera()` or `unmute()` should use. Omit `deviceId` for the
+browser's default device. See [Choosing a camera or microphone](#choosing-a-camera-or-microphone).
+
+### `RemoteMedia`
+
+`{ camera: MediaStream | null; microphone: MediaStream | null; screen: MediaStream | null }`. The media received from
+another participant, for a `<video>` (camera) or `<audio>` (microphone) element. `null` when that media is not
+available. `screen` is always `null` in this version.
+
+### `MediaConnectionStatus`
+
+| Status | Meaning |
+|---|---|
+| `connecting` | Setting up audio and video with this participant. |
+| `connected` | Audio and video are flowing. |
+| `interrupted` | The connection dropped after working; it may recover on its own. |
+| `failed` | The connection could not be set up or did not recover. An `error` event with `media_connection_failed` accompanies it. Rejoining starts a new attempt. |
 
 ### `ParticipantLeftReason`
 
@@ -242,7 +320,9 @@ New codes may be added in minor versions; handle unknown codes generically (for 
 | `device_not_found` | no | No camera or microphone was found. | media methods |
 | `device_unavailable` | yes | Your camera or microphone is being used by another application. | media methods |
 | `screen_share_cancelled` | no | Screen sharing was cancelled. | `startScreenShare()` |
-| `unsupported_environment` | no | This browser does not support meetings. Try a current version of Chrome, Edge, Firefox, or Safari. | `createMeetingEngine()`, `join()`, media methods |
+| `unsupported_environment` | no | This browser does not support meetings. Try a current version of Chrome, Edge, Firefox, or Safari. | `createMeetingEngine()`, `join()`, media methods, `error` |
+| `media_connection_failed` | yes | Audio and video couldn't connect to the other participant. Check your network and try rejoining. | `error` |
+| `media_participant_limit` | no | Audio and video are available with one other participant in this meeting. | `error`, once for each participant whose media this meeting cannot carry |
 
 \* Retry only with a new token from your backend.
 

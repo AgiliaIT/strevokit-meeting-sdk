@@ -17,6 +17,18 @@ export type IceCandidate = {
   usernameFragment?: string | null;
 };
 
+/** How the platform delivers media for a meeting, chosen from the stored meeting. */
+export type MediaMode = "p2p" | "sfu";
+
+/** Mirrors the browser `RTCIceServer` with `urls` always an array. */
+export type IceServerConfig = { urls: string[]; username?: string; credential?: string };
+
+/** How an established media connection is carried; receivers must handle unknown codes generically. */
+export type MediaPath = ReasonCode<"direct" | "relayed">;
+
+/** Outcome of one attempt to move a connection onto a fresh network path. */
+export type IceRestartOutcome = ReasonCode<"completed" | "failed">;
+
 export type SessionDescriptionPayload = { targetParticipantId: string; sdp: string };
 export type PeerPayload = { peerParticipantId: string };
 
@@ -31,11 +43,20 @@ export type PayloadMap = {
   "webrtc.offer": SessionDescriptionPayload;
   "webrtc.answer": SessionDescriptionPayload;
   "webrtc.ice_candidate": { targetParticipantId: string; candidate: IceCandidate };
-  "webrtc.connected": PeerPayload;
+  "webrtc.connected": PeerPayload & {
+    /** `relayed` when either side of the connection uses a relay. */
+    path?: MediaPath;
+    /** How the sender's own side of the connection is carried. */
+    localPath?: MediaPath;
+    /** How the other participant's side is carried, as seen by the sender. */
+    remotePath?: MediaPath;
+  };
   "webrtc.disconnected": PeerPayload;
   "webrtc.failed": PeerPayload & {
     reason: ReasonCode<"ice_failed" | "negotiation_failed" | "timeout">;
   };
+  "webrtc.ice_restart": { targetParticipantId: string };
+  "webrtc.ice_restart_result": PeerPayload & { outcome: IceRestartOutcome };
   "media.camera.started": EmptyPayload;
   "media.camera.stopped": EmptyPayload;
   "media.microphone.started": EmptyPayload;
@@ -49,8 +70,17 @@ export type PayloadMap = {
     reason: ReasonCode<"duration_limit" | "admin_action" | "policy" | "system">;
   };
   "session.authenticated": { role: Role };
-  "session.welcome": { role: Role; joinedAt: string; displayName?: string };
+  "session.welcome": {
+    role: Role;
+    joinedAt: string;
+    displayName?: string;
+    mediaMode?: MediaMode;
+    iceServers?: IceServerConfig[];
+    /** When the credentials in `iceServers` stop being accepted (RFC 3339 UTC). */
+    iceServersExpireAt?: string;
+  };
   "session.rejected": { code: ReasonCode<SessionRejectionCode>; detail?: string };
+  "session.ice_servers": { iceServers: IceServerConfig[]; expiresAt: string };
 };
 
 /** Known `session.rejected.code` values; receivers must handle unknown codes generically. */

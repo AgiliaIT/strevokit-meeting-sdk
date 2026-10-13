@@ -30,6 +30,8 @@ export const VALID_PAYLOADS: { [K in MessageType]: PayloadMap[K] } = {
   "webrtc.connected": { peerParticipantId: BOB },
   "webrtc.disconnected": { peerParticipantId: BOB },
   "webrtc.failed": { peerParticipantId: BOB, reason: "ice_failed" },
+  "webrtc.ice_restart": { targetParticipantId: BOB },
+  "webrtc.ice_restart_result": { peerParticipantId: BOB, outcome: "completed" },
   "media.camera.started": {},
   "media.camera.stopped": {},
   "media.microphone.started": {},
@@ -42,6 +44,10 @@ export const VALID_PAYLOADS: { [K in MessageType]: PayloadMap[K] } = {
   "session.authenticated": { role: "participant" },
   "session.welcome": { role: "host", joinedAt: "2026-09-28T10:00:12.000Z" },
   "session.rejected": { code: "target_not_present" },
+  "session.ice_servers": {
+    iceServers: [{ urls: ["stun:stun.example.com:3478"] }],
+    expiresAt: "2026-09-28T13:00:00Z",
+  },
 };
 
 export function envelope(

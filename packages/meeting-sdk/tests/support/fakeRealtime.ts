@@ -3,6 +3,8 @@
  * real protocol package so the SDK is exercised against the same rules as production.
  */
 import {
+  type IceServerConfig,
+  type MediaMode,
   type MessageType,
   type PayloadMap,
   type Role,
@@ -163,6 +165,13 @@ export class FakeWebSocket implements SocketLike {
   }
 }
 
+export type PeerReport = {
+  from: string;
+  type: "webrtc.connected" | "webrtc.disconnected" | "webrtc.failed";
+  peerParticipantId: string;
+  reason?: string;
+};
+
 export type PresentParticipant = {
   participantId: string;
   role?: Role;
@@ -182,6 +191,18 @@ export class FakeRealtime {
   holdWelcome = false;
   /** When set, `participant.leave` is ignored (no close), to exercise the leave fallback. */
   ignoreLeave = false;
+  /** Sent on every welcome when set. */
+  welcomeMediaMode: MediaMode | undefined;
+  /** Sent on every welcome when set. */
+  welcomeIceServers: IceServerConfig[] | undefined;
+  /** Sent on every welcome when set: when the credentials in `welcomeIceServers` expire. */
+  welcomeIceServersExpireAt: string | undefined;
+  /** Media connection reports received from clients, in order. */
+  readonly peerReports: PeerReport[] = [];
+  /** Every relayed or dropped `webrtc.offer|answer|ice_candidate|ice_restart` frame, in order. */
+  readonly peerFrames: { from: string; to: string; type: string; delivered: boolean }[] = [];
+  /** `webrtc.ice_restart_result` frames received from clients, in order. */
+  readonly restartResults: { from: string; peerParticipantId: string; outcome: string }[] = [];
   now: () => number = () => Date.now();
 
   readonly #members = new Map<string, Member>();
@@ -270,6 +291,11 @@ export class FakeRealtime {
   /** Deliver a valid server message to a connection. */
   sendMessage<T extends MessageType>(type: T, payload: PayloadMap[T], fromParticipantId: string, to?: string): void {
     this.send(this.#frame(type, fromParticipantId, payload), to);
+  }
+
+  /** Fresh connectivity servers for one participant, as the platform sends before the current ones expire. */
+  pushIceServers(participantId: string, iceServers: IceServerConfig[], expiresAt: string): void {
+    this.sendMessage("session.ice_servers", { iceServers: structuredClone(iceServers), expiresAt }, participantId, participantId);
   }
 
   /** Every joined connection receives `meeting.ended` (or `meeting.terminated`). */
@@ -428,6 +454,51 @@ export class FakeRealtime {
         this.#broadcast(token.participantId, data);
         return;
       }
+      case "webrtc.offer":
+      case "webrtc.answer":
+      case "webrtc.ice_candidate":
+      case "webrtc.ice_restart": {
+        if (!socket.joined) {
+          this.#reject(socket, "not_joined");
+          return;
+        }
+        const to = message.payload.targetParticipantId;
+        const target = this.#members.get(to);
+        if (!target) {
+          this.peerFrames.push({ from: token.participantId, to, type: message.type, delivered: false });
+          this.#reject(socket, "target_not_present");
+          return;
+        }
+        const delivered = target.socket !== undefined && target.socket.readyState === FakeWebSocket.OPEN;
+        this.peerFrames.push({ from: token.participantId, to, type: message.type, delivered });
+        if (target.socket) this.#deliver(target.socket, data);
+        return;
+      }
+      case "webrtc.connected":
+      case "webrtc.disconnected":
+      case "webrtc.failed": {
+        if (!socket.joined) {
+          this.#reject(socket, "not_joined");
+          return;
+        }
+        const report: PeerReport = {
+          from: token.participantId,
+          type: message.type,
+          peerParticipantId: message.payload.peerParticipantId,
+        };
+        if (message.type === "webrtc.failed") report.reason = message.payload.reason;
+        this.peerReports.push(report);
+        return;
+      }
+      case "webrtc.ice_restart_result": {
+        if (!socket.joined) {
+          this.#reject(socket, "not_joined");
+          return;
+        }
+        const { peerParticipantId, outcome } = message.payload;
+        this.restartResults.push({ from: token.participantId, peerParticipantId, outcome });
+        return;
+      }
       default:
         return;
     }
@@ -467,6 +538,9 @@ export class FakeRealtime {
       joinedAt: new Date(this.now()).toISOString(),
     };
     if (displayName !== undefined) welcome.displayName = displayName;
+    if (this.welcomeMediaMode !== undefined) welcome.mediaMode = this.welcomeMediaMode;
+    if (this.welcomeIceServers !== undefined) welcome.iceServers = structuredClone(this.welcomeIceServers);
+    if (this.welcomeIceServersExpireAt !== undefined) welcome.iceServersExpireAt = this.welcomeIceServersExpireAt;
     this.#deliver(socket, this.#frame("session.welcome", token.participantId, welcome));
 
     if (replaced) {

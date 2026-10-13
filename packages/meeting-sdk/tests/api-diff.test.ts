@@ -23,7 +23,28 @@ describe("diffApiReports", () => {
 
   it("parses every exported declaration", () => {
     const removedAll = edited(/```ts\n[\s\S]*?\n```/, "```ts\n```");
-    expect(diffApiReports(REPORT, removedAll).breaking).toHaveLength(18);
+    expect(diffApiReports(REPORT, removedAll).breaking).toHaveLength(21);
+  });
+
+  it("has only additions since 0.1.0", () => {
+    const released = readFileSync(join(import.meta.dirname, "fixtures", "meeting-sdk-0.1.0.api.md"), "utf8");
+    const { breaking, additive } = diffApiReports(released, REPORT);
+    expect(breaking).toEqual([]);
+    expect([...additive].sort()).toEqual(
+      [
+        "added MediaConnectionStatus",
+        "added MediaDeviceOptions",
+        "added RemoteMedia",
+        "added optional parameter to MeetingEngine.enableCamera",
+        "added optional parameter to MeetingEngine.unmute",
+        "added MeetingEngine.mediaConnectionStatus",
+        "added MeetingEngine.remoteMedia",
+        "added MeetingEventMap.media_connection_changed",
+        "added MeetingEventMap.remote_media_changed",
+        'added MeetingErrorCode "media_connection_failed"',
+        'added MeetingErrorCode "media_participant_limit"',
+      ].sort(),
+    );
   });
 
   it("detects a member removed from one declaration while another declaration has the same line", () => {
@@ -32,7 +53,7 @@ describe("diffApiReports", () => {
   });
 
   it("treats an added error code as additive and a removed one as breaking", () => {
-    const added = edited('| "unsupported_environment";', '| "unsupported_environment" | "brand_new_code";');
+    const added = edited('| "media_participant_limit";', '| "media_participant_limit" | "brand_new_code";');
     expect(diffApiReports(REPORT, added)).toEqual({ breaking: [], additive: ['added MeetingErrorCode "brand_new_code"'] });
 
     const removed = edited('"rate_limited" | ', "");
@@ -72,6 +93,24 @@ describe("diffApiReports", () => {
 
     const changed = edited("    join(): Promise<void>;", "    join(timeoutMs: number): Promise<void>;");
     expect(diffApiReports(REPORT, changed).breaking).toEqual(["changed MeetingEngine.join"]);
+  });
+
+  it("treats an appended optional parameter as additive, and a required or reordered one as breaking", () => {
+    const optional = edited("    join(): Promise<void>;", "    join(options?: { readonly fast?: boolean }): Promise<void>;");
+    expect(diffApiReports(REPORT, optional)).toEqual({
+      breaking: [],
+      additive: ["added optional parameter to MeetingEngine.join"],
+    });
+
+    const required = edited("    join(): Promise<void>;", "    join(options: { readonly fast?: boolean }): Promise<void>;");
+    expect(diffApiReports(REPORT, required).breaking).toEqual(["changed MeetingEngine.join"]);
+
+    const returnType = edited("    join(): Promise<void>;", "    join(options?: string): Promise<boolean>;");
+    expect(diffApiReports(REPORT, returnType).breaking).toEqual(["changed MeetingEngine.join"]);
+
+    const base = edited("    join(): Promise<void>;", "    join(a?: string): Promise<void>;");
+    const reordered = edited("    join(): Promise<void>;", "    join(b?: number, a?: string): Promise<void>;");
+    expect(diffApiReports(base, reordered).breaking).toEqual(["changed MeetingEngine.join"]);
   });
 
   it("treats a removed declaration as breaking and a new declaration as additive", () => {

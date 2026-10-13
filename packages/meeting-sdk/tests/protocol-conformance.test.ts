@@ -1,11 +1,12 @@
-import { parseSignalingMessage } from "@strevokit/signaling-protocol";
+import { decodeSignalingFrame, parseSignalingMessage } from "@strevokit/signaling-protocol";
 import { INVALID_SAMPLES, VALID_SAMPLES } from "@strevokit/signaling-protocol/conformance";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { __setTestEnvironment, currentEnvironment } from "../src/internal/env.js";
 import { Log } from "../src/internal/log.js";
 import { OUTBOUND_TYPES, SignalingSession } from "../src/internal/signalingSession.js";
 import { flush, testUlid } from "./support/fakeRealtime.js";
-import { type EngineHarness, createPhase1Harness, eventsOfType, recordEvents } from "./support/harness.js";
+import { type EngineHarness, createP2PHarness, createPhase1Harness, eventsOfType, recordEvents } from "./support/harness.js";
+import { joinedPair, settle } from "./support/p2p.js";
 
 function toFrame(input: unknown, kind: "frame" | "value"): string {
   return kind === "frame" ? (input as string) : JSON.stringify(input);
@@ -141,6 +142,53 @@ describe("outbound frames", () => {
     await engine.disableCamera();
     await engine.leave();
     expect(h.realtime.invalidClientFrames).toEqual([]);
+  });
+});
+
+describe("media frames (direct media meetings)", () => {
+  beforeEach(() => {
+    h.cleanup();
+    h = createP2PHarness({ iceServers: [{ urls: ["stun:stun.example.com:3478"] }] });
+  });
+
+  it("every media frame sent during a full run passes client-to-server validation", async () => {
+    const { low, high, lowId, highId } = await joinedPair(h);
+    await low.mute();
+    await low.disableCamera();
+    await high.unmute();
+    await low.leave();
+    await settle();
+    expect(h.realtime.invalidClientFrames).toEqual([]);
+    const frames = [lowId, highId].flatMap((id) => h.realtime.socketFor(id).sent);
+    const media = frames.filter((frame) => (JSON.parse(frame) as { type: string }).type.startsWith("webrtc."));
+    expect(new Set(media.map((frame) => (JSON.parse(frame) as { type: string }).type))).toEqual(
+      new Set(["webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "webrtc.connected"]),
+    );
+    for (const frame of media) expect(decodeSignalingFrame(frame, { direction: "client_to_server" }).ok, frame).toBe(true);
+  });
+
+  it("accepts the welcome samples that carry a media mode and server list", async () => {
+    const { session, received, protocolErrors } = await openSession();
+    const welcomes = VALID_SAMPLES.filter((s) => {
+      const payload = s.input.payload as Record<string, unknown>;
+      return s.input.type === "session.welcome" && ("mediaMode" in payload || "iceServers" in payload);
+    });
+    expect(welcomes.length).toBeGreaterThanOrEqual(3);
+    for (const sample of welcomes) h.realtime.send(JSON.stringify(sample.input));
+    await flush();
+    expect(protocolErrors()).toBe(0);
+    expect(received.filter((type) => type === "session.welcome")).toHaveLength(welcomes.length);
+    session.close();
+  });
+
+  it("refuses to send a media frame that fails validation", async () => {
+    const { session, participantId } = await openSession();
+    const socket = h.realtime.socketFor(participantId);
+    const before = socket.sent.length;
+    expect(session.sendPeer("webrtc.offer", { targetParticipantId: "not-an-id", sdp: "v=0" })).toBe(false);
+    expect(session.sendPeer("webrtc.connected", { peerParticipantId: testUlid() })).toBe(true);
+    expect(socket.sent.length).toBe(before + 1);
+    session.close();
   });
 });
 

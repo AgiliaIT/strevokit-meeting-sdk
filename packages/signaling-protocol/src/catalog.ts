@@ -16,6 +16,8 @@ const CATALOG = {
   "webrtc.connected": { family: "webrtc", direction: "client_to_server" },
   "webrtc.disconnected": { family: "webrtc", direction: "client_to_server" },
   "webrtc.failed": { family: "webrtc", direction: "client_to_server" },
+  "webrtc.ice_restart": { family: "webrtc", direction: "both" },
+  "webrtc.ice_restart_result": { family: "webrtc", direction: "client_to_server" },
   "media.camera.started": { family: "media", direction: "both" },
   "media.camera.stopped": { family: "media", direction: "both" },
   "media.microphone.started": { family: "media", direction: "both" },
@@ -28,6 +30,7 @@ const CATALOG = {
   "session.authenticated": { family: "session", direction: "server_to_client" },
   "session.welcome": { family: "session", direction: "server_to_client" },
   "session.rejected": { family: "session", direction: "server_to_client" },
+  "session.ice_servers": { family: "session", direction: "server_to_client" },
 } as const satisfies Record<string, CatalogEntry>;
 
 /** Protocol v1 message types. */

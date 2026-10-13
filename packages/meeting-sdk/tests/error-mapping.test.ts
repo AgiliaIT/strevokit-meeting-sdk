@@ -137,6 +137,17 @@ describe("MeetingError", () => {
     }
   });
 
+  it("describes media connection failures as retryable and the participant limit as not retryable", () => {
+    expect(new MeetingError("media_connection_failed")).toMatchObject({
+      message: "Audio and video couldn't connect to the other participant. Check your network and try rejoining.",
+      retryable: true,
+    });
+    expect(new MeetingError("media_participant_limit")).toMatchObject({
+      message: "Audio and video are available with one other participant in this meeting.",
+      retryable: false,
+    });
+  });
+
   it("freezes the error table", () => {
     expect(Object.isFrozen(ERROR_INFO)).toBe(true);
   });

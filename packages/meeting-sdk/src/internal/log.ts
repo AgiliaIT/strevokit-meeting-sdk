@@ -13,6 +13,10 @@ const ALLOWED_KEYS = new Set([
   "closeCode",
   "messageType",
   "durationMs",
+  "attempt",
+  "path",
+  "localPath",
+  "remotePath",
 ]);
 
 const JWT_SHAPE = /[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/;

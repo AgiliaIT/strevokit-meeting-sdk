@@ -23,7 +23,9 @@ export type MeetingErrorCode =
   | "device_not_found"
   | "device_unavailable"
   | "screen_share_cancelled"
-  | "unsupported_environment";
+  | "unsupported_environment"
+  | "media_connection_failed"
+  | "media_participant_limit";
 
 type ErrorInfo = { readonly message: string; readonly retryable: boolean };
 
@@ -66,6 +68,14 @@ export const ERROR_INFO: Readonly<Record<MeetingErrorCode, ErrorInfo>> = Object.
   unsupported_environment: {
     message:
       "This browser does not support meetings. Try a current version of Chrome, Edge, Firefox, or Safari.",
+    retryable: false,
+  },
+  media_connection_failed: {
+    message: "Audio and video couldn't connect to the other participant. Check your network and try rejoining.",
+    retryable: true,
+  },
+  media_participant_limit: {
+    message: "Audio and video are available with one other participant in this meeting.",
     retryable: false,
   },
 });

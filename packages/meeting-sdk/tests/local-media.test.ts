@@ -198,6 +198,172 @@ describe("failures", () => {
   });
 });
 
+describe("device choice", () => {
+  const videoConstraint = (index: number) => h.media.constraints[index]?.video;
+  const audioConstraint = (index: number) => h.media.constraints[index]?.audio;
+
+  it("1: enableCamera() captures the default camera with unchanged constraints", async () => {
+    const engine = await joinedHost();
+    await engine.enableCamera();
+    expect(h.media.constraints).toEqual([{ video: true, audio: false }]);
+    expect((h.media.latestTrack("camera") as FakeTrack).deviceId).toBe("camera-1");
+  });
+
+  it("2: enableCamera({ deviceId }) captures that camera exactly and announces it", async () => {
+    const engine = await joinedHost();
+    const events = recordEvents(engine);
+    await engine.enableCamera({ deviceId: "camera-2" });
+    expect(videoConstraint(0)).toEqual({ deviceId: { exact: "camera-2" } });
+    expect((h.media.latestTrack("camera") as FakeTrack).deviceId).toBe("camera-2");
+    expect(sentMedia(engine)).toEqual(["media.camera.started"]);
+    expect(eventsOfType(events, "local_media_changed")).toEqual([
+      { kind: "camera", enabled: true, stream: engine.localMedia.camera },
+    ]);
+  });
+
+  it("3: asking for the camera already in use, or for no device, is a no-op", async () => {
+    const engine = await joinedHost();
+    await engine.enableCamera({ deviceId: "camera-2" });
+    const events = recordEvents(engine);
+    await engine.enableCamera({ deviceId: "camera-2" });
+    await engine.enableCamera();
+    expect(h.media.calls.getUserMedia).toBe(1);
+    expect(eventsOfType(events, "local_media_changed")).toEqual([]);
+    expect(sentMedia(engine)).toEqual(["media.camera.started"]);
+  });
+
+  it("4: switching cameras while on swaps in place without an announcement and stops the old track", async () => {
+    const engine = await joinedHost();
+    await engine.enableCamera({ deviceId: "camera-1" });
+    const before = h.media.latestTrack("camera") as FakeTrack;
+    const events = recordEvents(engine);
+    await engine.enableCamera({ deviceId: "camera-2" });
+    const after = h.media.latestTrack("camera") as FakeTrack;
+    expect(after.deviceId).toBe("camera-2");
+    expect(before.readyState).toBe("ended");
+    expect(h.media.liveTracks("camera")).toBe(1);
+    expect(engine.localMediaState.camera).toBe(true);
+    expect(sentMedia(engine)).toEqual(["media.camera.started"]);
+    expect(eventsOfType(events, "local_media_changed")).toEqual([
+      { kind: "camera", enabled: true, stream: engine.localMedia.camera },
+    ]);
+    expect(engine.localMedia.camera?.getVideoTracks()[0]).toBe(after);
+  });
+
+  it("5: unmuting a kept microphone with the same or no device re-enables it without capturing", async () => {
+    const engine = await joinedHost();
+    await engine.unmute({ deviceId: "mic-1" });
+    const track = h.media.latestTrack("microphone") as FakeTrack;
+    await engine.mute();
+    await engine.unmute({ deviceId: "mic-1" });
+    await engine.mute();
+    await engine.unmute();
+    expect(h.media.calls.getUserMedia).toBe(1);
+    expect(track.enabled).toBe(true);
+    expect(sentMedia(engine).filter((type) => type === "media.microphone.started")).toHaveLength(3);
+  });
+
+  it("6: unmuting with another device replaces the kept microphone and announces it", async () => {
+    const engine = await joinedHost();
+    await engine.unmute({ deviceId: "mic-1" });
+    const kept = h.media.latestTrack("microphone") as FakeTrack;
+    await engine.mute();
+    const events = recordEvents(engine);
+    await engine.unmute({ deviceId: "mic-2" });
+    expect(audioConstraint(1)).toEqual({ deviceId: { exact: "mic-2" } });
+    expect(kept.readyState).toBe("ended");
+    expect((h.media.latestTrack("microphone") as FakeTrack).deviceId).toBe("mic-2");
+    expect(sentMedia(engine)).toEqual(["media.microphone.started", "media.microphone.stopped", "media.microphone.started"]);
+    expect(eventsOfType(events, "local_media_changed")).toEqual([
+      { kind: "microphone", enabled: true, stream: engine.localMedia.microphone },
+    ]);
+  });
+
+  it("7: switching microphones while unmuted swaps in place without an announcement", async () => {
+    const engine = await joinedHost();
+    await engine.unmute();
+    const before = h.media.latestTrack("microphone") as FakeTrack;
+    await engine.unmute({ deviceId: "mic-2" });
+    const after = h.media.latestTrack("microphone") as FakeTrack;
+    expect(after.deviceId).toBe("mic-2");
+    expect(after.enabled).toBe(true);
+    expect(before.readyState).toBe("ended");
+    expect(sentMedia(engine)).toEqual(["media.microphone.started"]);
+  });
+
+  it("8: a missing device rejects with device_not_found and leaves the current capture running", async () => {
+    const engine = await joinedHost();
+    await engine.enableCamera();
+    await engine.unmute();
+    await engine.mute();
+    const camera = h.media.latestTrack("camera") as FakeTrack;
+    const microphone = h.media.latestTrack("microphone") as FakeTrack;
+    const events = recordEvents(engine);
+    await expect(engine.enableCamera({ deviceId: "camera-gone" })).rejects.toMatchObject({ code: "device_not_found" });
+    await expect(engine.unmute({ deviceId: "mic-gone" })).rejects.toMatchObject({ code: "device_not_found" });
+    expect(camera.readyState).toBe("live");
+    expect(microphone.readyState).toBe("live");
+    expect(engine.localMediaState).toEqual({ camera: true, microphone: false, screen: false });
+    expect(engine.localMedia.camera?.getVideoTracks()[0]).toBe(camera);
+    expect(eventsOfType(events, "local_media_changed")).toEqual([]);
+    expect(sentMedia(engine)).toEqual(["media.camera.started", "media.microphone.started", "media.microphone.stopped"]);
+  });
+
+  it("9: a busy device rejects with device_unavailable and leaves the current capture running", async () => {
+    const engine = await joinedHost();
+    await engine.enableCamera();
+    const camera = h.media.latestTrack("camera") as FakeTrack;
+    h.media.failNext("camera", "NotReadableError");
+    await expect(engine.enableCamera({ deviceId: "camera-2" })).rejects.toMatchObject({ code: "device_unavailable" });
+    expect(camera.readyState).toBe("live");
+    expect(engine.localMediaState.camera).toBe(true);
+    expect(h.media.liveTracks("camera")).toBe(1);
+  });
+
+  it("10: device choices before joining reject with not_joined without capturing", async () => {
+    const engine = h.createEngine({ role: "host" });
+    await expect(engine.enableCamera({ deviceId: "camera-1" })).rejects.toMatchObject({ code: "not_joined" });
+    await expect(engine.unmute({ deviceId: "mic-1" })).rejects.toMatchObject({ code: "not_joined" });
+    expect(h.media.calls.getUserMedia).toBe(0);
+  });
+
+  it("shares a queued call only when the target and the device match", async () => {
+    const engine = await joinedHost();
+    const release = h.media.holdNext("camera");
+    const first = engine.enableCamera({ deviceId: "camera-1" });
+    const same = engine.enableCamera({ deviceId: "camera-1" });
+    const other = engine.enableCamera({ deviceId: "camera-2" });
+    expect(same).toBe(first);
+    expect(other).not.toBe(first);
+    release();
+    await Promise.all([first, other]);
+    expect((h.media.latestTrack("camera") as FakeTrack).deviceId).toBe("camera-2");
+    expect(h.media.liveTracks("camera")).toBe(1);
+  });
+
+  it("stops the new capture when the meeting is left during a switch", async () => {
+    const engine = await joinedHost();
+    await engine.enableCamera();
+    const release = h.media.holdNext("camera");
+    const switching = engine.enableCamera({ deviceId: "camera-2" });
+    await engine.leave();
+    release();
+    await expect(switching).rejects.toMatchObject({ code: "not_joined" });
+    expect(h.media.liveTracks()).toBe(0);
+  });
+
+  it("never logs a device ID", async () => {
+    const lines: string[] = [];
+    const record = (message: string, fields?: unknown) => lines.push(`${message} ${JSON.stringify(fields ?? {})}`);
+    const engine = h.createEngine({ role: "host", logger: { debug: record, info: record, warn: record, error: record } });
+    await engine.join();
+    await engine.enableCamera({ deviceId: "camera-2" });
+    await engine.enableCamera({ deviceId: "camera-1" });
+    await expect(engine.unmute({ deviceId: "mic-gone" })).rejects.toBeDefined();
+    expect(lines.join("\n")).not.toMatch(/camera-[12]|mic-gone/);
+  });
+});
+
 describe("release", () => {
   it("stops every track on leave", async () => {
     const engine = await joinedHost();

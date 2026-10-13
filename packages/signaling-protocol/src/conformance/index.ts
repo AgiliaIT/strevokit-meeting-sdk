@@ -4,7 +4,13 @@
  */
 
 import { type ReceiveDirection, MESSAGE_CATALOG, isDirectionAllowed, isMessageType } from "../catalog.js";
-import { MAX_DISPLAY_NAME_CODE_POINTS, MAX_MESSAGE_BYTES, MAX_SDP_BYTES } from "../limits.js";
+import {
+  MAX_DISPLAY_NAME_CODE_POINTS,
+  MAX_ICE_SERVER_URL_LENGTH,
+  MAX_ICE_SERVERS,
+  MAX_MESSAGE_BYTES,
+  MAX_SDP_BYTES,
+} from "../limits.js";
 import type { RejectionCode, RejectionDetail } from "../rejection.js";
 import type { MessageType } from "../catalog.js";
 import { SDP_FIXTURES } from "./sdp-fixtures.js";
@@ -48,6 +54,9 @@ function directionsFor(type: MessageType): readonly ReceiveDirection[] {
 function valid(name: string, type: MessageType, payload: Record<string, unknown>, overrides?: Record<string, unknown>): ValidSample {
   return { name, input: msg(type, payload, overrides), allowedDirections: directionsFor(type) };
 }
+
+const SAMPLE_TURN_USERNAME = `1780000000:${"a".repeat(24)}`;
+const SAMPLE_TURN_CREDENTIAL = `sample-${"c".repeat(20)}`;
 
 const candidate = {
   candidate: "candidate:842163049 1 udp 1677729535 203.0.113.7 46154 typ srflx raddr 0.0.0.0 rport 0 generation 0",
@@ -94,6 +103,57 @@ export const VALID_SAMPLES: readonly ValidSample[] = Object.freeze([
     joinedAt: "2026-09-28T10:00:12.000Z",
     displayName: "Zoë Müller",
   }),
+  valid("session.welcome with p2p media and no ice servers", "session.welcome", {
+    role: "host",
+    joinedAt: "2026-09-28T10:00:12.000Z",
+    mediaMode: "p2p",
+    iceServers: [],
+  }),
+  valid("session.welcome with sfu media", "session.welcome", {
+    role: "participant",
+    joinedAt: "2026-09-28T10:00:12.000Z",
+    mediaMode: "sfu",
+  }),
+  valid("session.welcome with stun and turn servers", "session.welcome", {
+    role: "host",
+    joinedAt: "2026-09-28T10:00:12.000Z",
+    mediaMode: "p2p",
+    iceServers: [
+      { urls: ["stun:stun.example.com:3478"] },
+      { urls: ["turn:turn.example.com:3478?transport=udp", "turns:turn.example.com:5349"], username: "1780000000:01JQCCCCCCCCCCCCCCCCCCCCCC", credential: "c2VjcmV0" },
+    ],
+  }),
+  valid("session.welcome with relay credentials and their expiry", "session.welcome", {
+    role: "participant",
+    joinedAt: "2026-09-28T10:00:12.000Z",
+    mediaMode: "p2p",
+    iceServers: [
+      { urls: ["stun:stun.example.com:3478"] },
+      { urls: ["turn:turn.example.com:3478?transport=udp"], username: SAMPLE_TURN_USERNAME, credential: SAMPLE_TURN_CREDENTIAL },
+    ],
+    iceServersExpireAt: "2026-09-28T13:00:12Z",
+  }),
+  valid("session.ice_servers with stun and turn servers", "session.ice_servers", {
+    iceServers: [
+      { urls: ["stun:stun.example.com:3478"] },
+      {
+        urls: ["turn:turn.example.com:3478?transport=udp", "turn:turn.example.com:3478?transport=tcp"],
+        username: SAMPLE_TURN_USERNAME,
+        credential: SAMPLE_TURN_CREDENTIAL,
+      },
+    ],
+    expiresAt: "2026-09-28T13:00:12Z",
+  }),
+  valid("session.ice_servers with no servers", "session.ice_servers", { iceServers: [], expiresAt: "2026-09-28T13:00:12Z" }),
+  valid("webrtc.ice_restart", "webrtc.ice_restart", { targetParticipantId: BOB }),
+  valid("webrtc.connected with relayed path", "webrtc.connected", { peerParticipantId: BOB, path: "relayed" }),
+  valid("webrtc.connected with unknown future path", "webrtc.connected", { peerParticipantId: BOB, path: "future_path" }),
+  valid("webrtc.connected with both sides", "webrtc.connected",
+    { peerParticipantId: BOB, path: "relayed", localPath: "relayed", remotePath: "direct" }),
+  valid("webrtc.connected with unknown future sides", "webrtc.connected",
+    { peerParticipantId: BOB, localPath: "future_path", remotePath: "future_path" }),
+  valid("webrtc.ice_restart_result completed", "webrtc.ice_restart_result", { peerParticipantId: BOB, outcome: "completed" }),
+  valid("webrtc.ice_restart_result failed", "webrtc.ice_restart_result", { peerParticipantId: BOB, outcome: "failed" }),
   valid("session.rejected", "session.rejected", { code: "target_not_present" }),
   valid("session.rejected with detail", "session.rejected", { code: "invalid_envelope", detail: "message_too_large" }),
   valid("extra envelope and payload fields are ignored", "webrtc.offer",
@@ -135,6 +195,8 @@ function withoutKey(obj: Record<string, unknown>, key: string): Record<string, u
 }
 
 const join = msg("participant.join", {});
+const WELCOME = { role: "host", joinedAt: "2026-09-28T10:00:00Z" };
+const STUN_URL = "stun:stun.example.com:3478";
 
 function paddedFrame(targetBytes: number, char: string, bytesPerChar: number): string {
   const skeleton = JSON.stringify({ ...join, pad: "" });
@@ -225,6 +287,24 @@ export const INVALID_SAMPLES: readonly InvalidSample[] = Object.freeze([
   invalidValue("session.welcome with empty displayName", msg("session.welcome", { role: "host", joinedAt: "2026-09-28T10:00:00Z", displayName: "" }), "invalid_payload", "invalid_format", "payload.displayName"),
   invalidValue("session.welcome with displayName over limit", msg("session.welcome", { role: "host", joinedAt: "2026-09-28T10:00:00Z", displayName: "n".repeat(MAX_DISPLAY_NAME_CODE_POINTS + 1) }), "invalid_payload", "too_long", "payload.displayName"),
   invalidValue("session.welcome with non-string displayName", msg("session.welcome", { role: "host", joinedAt: "2026-09-28T10:00:00Z", displayName: 42 }), "invalid_payload", "wrong_type", "payload.displayName"),
+  invalidValue("session.welcome with unknown mediaMode", msg("session.welcome", { ...WELCOME, mediaMode: "mesh" }), "invalid_payload", "invalid_format", "payload.mediaMode"),
+  invalidValue("session.welcome with iceServers as object", msg("session.welcome", { ...WELCOME, iceServers: { urls: [STUN_URL] } }), "invalid_payload", "wrong_type", "payload.iceServers"),
+  invalidValue("session.welcome with too many iceServers", msg("session.welcome", { ...WELCOME, iceServers: Array.from({ length: MAX_ICE_SERVERS + 1 }, () => ({ urls: [STUN_URL] })) }), "invalid_payload", "too_long", "payload.iceServers"),
+  invalidValue("session.welcome with empty urls", msg("session.welcome", { ...WELCOME, iceServers: [{ urls: [] }] }), "invalid_payload", "out_of_range", "payload.iceServers.0.urls"),
+  invalidValue("session.welcome with http url", msg("session.welcome", { ...WELCOME, iceServers: [{ urls: ["http://example.com"] }] }), "invalid_payload", "invalid_format", "payload.iceServers.0.urls.0"),
+  invalidValue("session.welcome with url over limit", msg("session.welcome", { ...WELCOME, iceServers: [{ urls: [`stun:${"s".repeat(MAX_ICE_SERVER_URL_LENGTH - 4)}`] }] }), "invalid_payload", "too_long", "payload.iceServers.0.urls.0"),
+  invalidValue("session.welcome with non-string credential", msg("session.welcome", { ...WELCOME, iceServers: [{ urls: [STUN_URL], username: "u", credential: 42 }] }), "invalid_payload", "wrong_type", "payload.iceServers.0.credential"),
+  invalidValue("session.welcome with non-string iceServersExpireAt", msg("session.welcome", { ...WELCOME, iceServersExpireAt: 1780000000 }), "invalid_payload", "wrong_type", "payload.iceServersExpireAt"),
+  invalidValue("session.ice_servers without expiresAt", msg("session.ice_servers", { iceServers: [] }), "invalid_payload", "missing_field", "payload.expiresAt"),
+  invalidValue("session.ice_servers with malformed expiresAt", msg("session.ice_servers", { iceServers: [], expiresAt: "2026-09-28 13:00" }), "invalid_payload", "invalid_format", "payload.expiresAt"),
+  invalidValue("client sends session.ice_servers", msg("session.ice_servers", { iceServers: [], expiresAt: "2026-09-28T13:00:00Z" }),
+    "direction_not_allowed", undefined, "type", "client_to_server"),
+  invalidValue("server sends webrtc.ice_restart_result", msg("webrtc.ice_restart_result", { peerParticipantId: BOB, outcome: "completed" }),
+    "direction_not_allowed", undefined, "type", "server_to_client"),
+  invalidValue("webrtc.ice_restart addressed to self", msg("webrtc.ice_restart", { targetParticipantId: ALICE }), "invalid_payload", "invalid_format", "payload.targetParticipantId"),
+  invalidValue("webrtc.connected with malformed path", msg("webrtc.connected", { peerParticipantId: BOB, path: "Relayed Path" }), "invalid_payload", "invalid_format", "payload.path"),
+  invalidValue("webrtc.connected with malformed localPath", msg("webrtc.connected", { peerParticipantId: BOB, localPath: "Relayed Path" }), "invalid_payload", "invalid_format", "payload.localPath"),
+  invalidValue("webrtc.connected with non-string remotePath", msg("webrtc.connected", { peerParticipantId: BOB, remotePath: 1 }), "invalid_payload", "wrong_type", "payload.remotePath"),
   invalidValue("session.rejected with malformed code", msg("session.rejected", { code: "Not Joined" }), "invalid_payload", "invalid_format", "payload.code"),
   invalidValue("session.rejected without code", msg("session.rejected", {}), "invalid_payload", "missing_field", "payload.code"),
 ]);

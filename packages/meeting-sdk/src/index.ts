@@ -5,6 +5,8 @@ export type {
   CloseReason,
   ConnectionState,
   LocalMedia,
+  MediaConnectionStatus,
+  MediaDeviceOptions,
   MediaKind,
   MediaState,
   MeetingEngine,
@@ -16,5 +18,6 @@ export type {
   Participant,
   ParticipantLeftReason,
   ParticipantRole,
+  RemoteMedia,
   SelfParticipant,
 } from "./public/types.js";

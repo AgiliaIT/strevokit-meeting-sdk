@@ -3,6 +3,11 @@ import test from "node:test";
 import {
   MAX_DISPLAY_NAME_CODE_POINTS,
   MAX_ICE_CANDIDATE_LENGTH,
+  MAX_ICE_SERVER_CREDENTIAL_LENGTH,
+  MAX_ICE_SERVER_URL_LENGTH,
+  MAX_ICE_SERVER_URLS,
+  MAX_ICE_SERVER_USERNAME_LENGTH,
+  MAX_ICE_SERVERS,
   MAX_REASON_LENGTH,
   MAX_SDP_BYTES,
   MESSAGE_TYPES,
@@ -316,6 +321,199 @@ test("session.welcome accepts an optional displayName with the participant.joine
     ),
     "too_long",
     "payload.displayName",
+  );
+});
+
+test("session.welcome accepts optional mediaMode and iceServers", () => {
+  const base = { role: "host", joinedAt: "2026-09-28T10:00:00Z" };
+  const p2p = expectOk(parseSignalingMessage(envelope("session.welcome", { ...base, mediaMode: "p2p", iceServers: [] })));
+  assert.deepEqual(p2p.payload, { ...base, mediaMode: "p2p", iceServers: [] });
+  const sfu = expectOk(parseSignalingMessage(envelope("session.welcome", { ...base, mediaMode: "sfu" })));
+  assert.deepEqual(sfu.payload, { ...base, mediaMode: "sfu" });
+  const servers = [
+    { urls: ["stun:stun.example.com:3478"] },
+    { urls: ["turn:turn.example.com:3478", "turns:turn.example.com:5349"], username: "u", credential: "c" },
+  ];
+  const withServers = expectOk(parseSignalingMessage(envelope("session.welcome", { ...base, iceServers: servers })));
+  assert.deepEqual(withServers.payload, { ...base, iceServers: servers });
+  const fourUrls = ["stun:a.example.com", "stuns:b.example.com", "turn:c.example.com", "turns:d.example.com"];
+  expectOk(
+    parseSignalingMessage(
+      envelope("session.welcome", {
+        ...base,
+        iceServers: Array.from({ length: MAX_ICE_SERVERS }, () => ({ urls: fourUrls })),
+      }),
+    ),
+  );
+  expectOk(
+    parseSignalingMessage(
+      envelope("session.welcome", {
+        ...base,
+        iceServers: [{ urls: [`stun:${"s".repeat(MAX_ICE_SERVER_URL_LENGTH - 5)}`], username: "u".repeat(MAX_ICE_SERVER_USERNAME_LENGTH), credential: "c".repeat(MAX_ICE_SERVER_CREDENTIAL_LENGTH) }],
+      }),
+    ),
+  );
+});
+
+test("session.welcome rejects malformed mediaMode and iceServers", () => {
+  const base = { role: "host", joinedAt: "2026-09-28T10:00:00Z" };
+  const welcome = (extra: Record<string, unknown>) => parseSignalingMessage(envelope("session.welcome", { ...base, ...extra }));
+  const stun = "stun:stun.example.com";
+  const cases: [Record<string, unknown>, string, string][] = [
+    [{ mediaMode: 1 }, "wrong_type", "payload.mediaMode"],
+    [{ mediaMode: "mesh" }, "invalid_format", "payload.mediaMode"],
+    [{ mediaMode: "P2P" }, "invalid_format", "payload.mediaMode"],
+    [{ iceServers: "stun:x" }, "wrong_type", "payload.iceServers"],
+    [{ iceServers: null }, "wrong_type", "payload.iceServers"],
+    [{ iceServers: Array.from({ length: MAX_ICE_SERVERS + 1 }, () => ({ urls: [stun] })) }, "too_long", "payload.iceServers"],
+    [{ iceServers: ["stun:x"] }, "wrong_type", "payload.iceServers.0"],
+    [{ iceServers: [{}] }, "missing_field", "payload.iceServers.0.urls"],
+    [{ iceServers: [{ urls: stun }] }, "wrong_type", "payload.iceServers.0.urls"],
+    [{ iceServers: [{ urls: [7] }] }, "wrong_type", "payload.iceServers.0.urls.0"],
+    [{ iceServers: [{ urls: [] }] }, "out_of_range", "payload.iceServers.0.urls"],
+    [{ iceServers: [{ urls: Array.from({ length: MAX_ICE_SERVER_URLS + 1 }, () => stun) }] }, "out_of_range", "payload.iceServers.0.urls"],
+    [{ iceServers: [{ urls: [""] }] }, "invalid_format", "payload.iceServers.0.urls.0"],
+    [{ iceServers: [{ urls: ["stun:"] }] }, "invalid_format", "payload.iceServers.0.urls.0"],
+    [{ iceServers: [{ urls: ["https://turn.example.com"] }] }, "invalid_format", "payload.iceServers.0.urls.0"],
+    [{ iceServers: [{ urls: [`turn:${"t".repeat(MAX_ICE_SERVER_URL_LENGTH)}`] }] }, "too_long", "payload.iceServers.0.urls.0"],
+    [{ iceServers: [{ urls: [stun], username: 1 }] }, "wrong_type", "payload.iceServers.0.username"],
+    [{ iceServers: [{ urls: [stun], credential: null }] }, "wrong_type", "payload.iceServers.0.credential"],
+    [{ iceServers: [{ urls: [stun], username: "u".repeat(MAX_ICE_SERVER_USERNAME_LENGTH + 1) }] }, "too_long", "payload.iceServers.0.username"],
+    [{ iceServers: [{ urls: [stun], credential: "c".repeat(MAX_ICE_SERVER_CREDENTIAL_LENGTH + 1) }] }, "too_long", "payload.iceServers.0.credential"],
+    [{ iceServers: [{ urls: [stun] }, { urls: ["http://x"] }] }, "invalid_format", "payload.iceServers.1.urls.0"],
+  ];
+  for (const [extra, detail, field] of cases) expectPayloadError(welcome(extra), detail, field);
+});
+
+test("session.welcome accepts an optional UTC iceServersExpireAt", () => {
+  const base = { role: "host", joinedAt: "2026-09-28T10:00:00Z", mediaMode: "p2p" };
+  const servers = [{ urls: ["turn:turn.example.com:3478"], username: "u", credential: "c" }];
+  const welcome = expectOk(
+    parseSignalingMessage(
+      envelope("session.welcome", { ...base, iceServers: servers, iceServersExpireAt: "2026-09-28T13:00:00Z" }),
+    ),
+  );
+  assert.deepEqual(welcome.payload, { ...base, iceServers: servers, iceServersExpireAt: "2026-09-28T13:00:00Z" });
+  expectPayloadError(
+    parseSignalingMessage(envelope("session.welcome", { ...base, iceServersExpireAt: 1780000000 })),
+    "wrong_type",
+    "payload.iceServersExpireAt",
+  );
+  expectPayloadError(
+    parseSignalingMessage(envelope("session.welcome", { ...base, iceServersExpireAt: "2026-09-28T13:00:00+03:00" })),
+    "invalid_format",
+    "payload.iceServersExpireAt",
+  );
+});
+
+test("session.ice_servers requires a bounded server list and a UTC expiresAt", () => {
+  const servers = [
+    { urls: ["stun:stun.example.com:3478"] },
+    { urls: ["turn:turn.example.com:3478?transport=udp", "turn:turn.example.com:3478?transport=tcp"], username: "u", credential: "c" },
+  ];
+  const full = expectOk(
+    parseSignalingMessage(envelope("session.ice_servers", { iceServers: servers, expiresAt: "2026-09-28T13:00:00Z", extra: 1 })),
+  );
+  assert.deepEqual(full.payload, { iceServers: servers, expiresAt: "2026-09-28T13:00:00Z" });
+  const none = expectOk(
+    parseSignalingMessage(envelope("session.ice_servers", { iceServers: [], expiresAt: "2026-09-28T13:00:00Z" })),
+  );
+  assert.deepEqual(none.payload, { iceServers: [], expiresAt: "2026-09-28T13:00:00Z" });
+
+  const push = (payload: Record<string, unknown>) => parseSignalingMessage(envelope("session.ice_servers", payload));
+  const cases: [Record<string, unknown>, string, string][] = [
+    [{ expiresAt: "2026-09-28T13:00:00Z" }, "missing_field", "payload.iceServers"],
+    [{ iceServers: [] }, "missing_field", "payload.expiresAt"],
+    [{ iceServers: [], expiresAt: "tomorrow" }, "invalid_format", "payload.expiresAt"],
+    [{ iceServers: [], expiresAt: 1780000000 }, "wrong_type", "payload.expiresAt"],
+    [{ iceServers: {}, expiresAt: "2026-09-28T13:00:00Z" }, "wrong_type", "payload.iceServers"],
+    [
+      { iceServers: Array.from({ length: MAX_ICE_SERVERS + 1 }, () => servers[0]), expiresAt: "2026-09-28T13:00:00Z" },
+      "too_long",
+      "payload.iceServers",
+    ],
+    [{ iceServers: [{ urls: ["http://x"] }], expiresAt: "2026-09-28T13:00:00Z" }, "invalid_format", "payload.iceServers.0.urls.0"],
+  ];
+  for (const [payload, detail, field] of cases) expectPayloadError(push(payload), detail, field);
+});
+
+test("webrtc.ice_restart targets another participant", () => {
+  const restart = expectOk(parseSignalingMessage(envelope("webrtc.ice_restart", { targetParticipantId: BOB, sdp: "x" })));
+  assert.deepEqual(restart.payload, { targetParticipantId: BOB });
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.ice_restart", {})),
+    "missing_field",
+    "payload.targetParticipantId",
+  );
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.ice_restart", { targetParticipantId: ALICE })),
+    "invalid_format",
+    "payload.targetParticipantId",
+  );
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.ice_restart", { targetParticipantId: "12345" })),
+    "invalid_ulid",
+    "payload.targetParticipantId",
+  );
+});
+
+test("webrtc.connected accepts an optional open path code", () => {
+  for (const path of ["direct", "relayed", "future_path"]) {
+    const connected = expectOk(parseSignalingMessage(envelope("webrtc.connected", { peerParticipantId: BOB, path })));
+    assert.deepEqual(connected.payload, { peerParticipantId: BOB, path });
+  }
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.connected", { peerParticipantId: BOB, path: "Relayed" })),
+    "invalid_format",
+    "payload.path",
+  );
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.connected", { peerParticipantId: BOB, path: 1 })),
+    "wrong_type",
+    "payload.path",
+  );
+});
+
+test("webrtc.connected accepts optional open localPath and remotePath codes", () => {
+  const payload = { peerParticipantId: BOB, path: "relayed", localPath: "relayed", remotePath: "direct" };
+  assert.deepEqual(expectOk(parseSignalingMessage(envelope("webrtc.connected", payload))).payload, payload);
+  const future = { peerParticipantId: BOB, localPath: "future_path", remotePath: "future_path" };
+  assert.deepEqual(expectOk(parseSignalingMessage(envelope("webrtc.connected", future))).payload, future);
+  for (const key of ["localPath", "remotePath"]) {
+    expectPayloadError(
+      parseSignalingMessage(envelope("webrtc.connected", { peerParticipantId: BOB, [key]: "Relayed" })),
+      "invalid_format",
+      `payload.${key}`,
+    );
+    expectPayloadError(
+      parseSignalingMessage(envelope("webrtc.connected", { peerParticipantId: BOB, [key]: 1 })),
+      "wrong_type",
+      `payload.${key}`,
+    );
+  }
+});
+
+test("webrtc.ice_restart_result carries a peer and an open outcome code", () => {
+  for (const outcome of ["completed", "failed", "future_outcome"]) {
+    const result = expectOk(
+      parseSignalingMessage(envelope("webrtc.ice_restart_result", { peerParticipantId: BOB, outcome })),
+    );
+    assert.deepEqual(result.payload, { peerParticipantId: BOB, outcome });
+  }
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.ice_restart_result", { peerParticipantId: BOB })),
+    "missing_field",
+    "payload.outcome",
+  );
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.ice_restart_result", { peerParticipantId: BOB, outcome: "Done!" })),
+    "invalid_format",
+    "payload.outcome",
+  );
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.ice_restart_result", { peerParticipantId: ALICE, outcome: "completed" })),
+    "invalid_format",
+    "payload.peerParticipantId",
   );
 });
 

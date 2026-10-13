@@ -1,5 +1,6 @@
 import {
   type MessageType,
+  type PayloadMap,
   type SignalingMessage,
   createSignalingMessage,
   decodeSignalingFrame,
@@ -27,6 +28,20 @@ export const OUTBOUND_TYPES = Object.freeze([
 ] as const satisfies readonly MessageType[]);
 
 export type OutboundType = (typeof OUTBOUND_TYPES)[number];
+
+/** Media-negotiation and connection-report frames, sent on behalf of the media delivery. */
+export const PEER_OUTBOUND_TYPES = Object.freeze([
+  "webrtc.offer",
+  "webrtc.answer",
+  "webrtc.ice_candidate",
+  "webrtc.connected",
+  "webrtc.disconnected",
+  "webrtc.failed",
+  "webrtc.ice_restart",
+  "webrtc.ice_restart_result",
+] as const satisfies readonly MessageType[]);
+
+export type PeerOutboundType = (typeof PEER_OUTBOUND_TYPES)[number];
 
 export interface SessionCallbacks {
   onMessage(message: SignalingMessage): void;
@@ -101,6 +116,27 @@ export class SignalingSession {
       return true;
     } catch {
       this.#log.warn("frame could not be sent", { messageType: type });
+      return false;
+    }
+  }
+
+  /**
+   * Sends a media frame. Returns false when the connection is not open or the frame fails validation. The payload
+   * is never logged.
+   */
+  sendPeer<T extends PeerOutboundType>(type: T, payload: PayloadMap[T]): boolean {
+    const socket = this.#socket;
+    if (!socket || !this.#opened || !this.#callbacks) return false;
+    try {
+      const message = createSignalingMessage(type, {
+        meetingId: this.#addressing.meetingId,
+        participantId: this.#addressing.participantId,
+        payload,
+      });
+      socket.send(encodeSignalingMessage(message as SignalingMessage));
+      return true;
+    } catch {
+      this.#log.debug("frame could not be sent", { messageType: type });
       return false;
     }
   }

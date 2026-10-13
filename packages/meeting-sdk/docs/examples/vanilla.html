@@ -14,6 +14,7 @@
       <button id="leave" disabled>Leave</button>
     </div>
     <ul id="participants"></ul>
+    <div id="remote"></div>
 
     <script type="module">
       // With a bundler, import from "@strevokit/meeting-sdk" instead.
@@ -47,6 +48,32 @@
       engine.on("local_media_changed", ({ kind, enabled }) => {
         if (kind === "camera") $("preview").srcObject = engine.localMedia.camera;
         $(kind).setAttribute("aria-pressed", String(enabled));
+      });
+      // One <figure> per remote participant, holding a <video> for their camera and an <audio> for their microphone.
+      function remoteTile(participantId) {
+        let tile = document.querySelector(`[data-participant="${participantId}"]`);
+        if (!tile) {
+          tile = document.createElement("figure");
+          tile.dataset.participant = participantId;
+          const video = Object.assign(document.createElement("video"), { autoplay: true, playsInline: true, muted: true, width: 320 });
+          const audio = Object.assign(document.createElement("audio"), { autoplay: true });
+          const caption = document.createElement("figcaption");
+          tile.append(video, audio, caption);
+          $("remote").append(tile);
+        }
+        return tile;
+      }
+      engine.on("remote_media_changed", ({ participantId, kind, stream }) => {
+        const tile = remoteTile(participantId);
+        if (kind === "camera") tile.querySelector("video").srcObject = stream;
+        if (kind === "microphone") tile.querySelector("audio").srcObject = stream;
+      });
+      engine.on("media_connection_changed", ({ participantId, status }) => {
+        remoteTile(participantId).querySelector("figcaption").textContent =
+          status === "interrupted" ? "Connection lost — reconnecting…" : (status ?? "");
+      });
+      engine.on("participant_left", ({ participantId }) => {
+        document.querySelector(`[data-participant="${participantId}"]`)?.remove();
       });
       engine.on("error", ({ error }) => alert(error.message));
       engine.on("closed", ({ reason, error }) => {

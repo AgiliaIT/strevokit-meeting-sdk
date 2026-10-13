@@ -406,6 +406,29 @@ export function describeMeetingEngineContract(name: string, makeHarness: () => E
         expect(host.localMediaState[kind]).toBe(false);
       });
 
+      it("captures with the 0.3.0 constraints when device options are omitted", async () => {
+        const host = await joined("host");
+        await host.enableCamera();
+        await host.unmute();
+        await host.enableCamera({});
+        await host.unmute({});
+        expect(h.media.constraints).toEqual([
+          { video: true, audio: false },
+          { audio: true, video: false },
+        ]);
+      });
+
+      it("rejects an unknown device with device_not_found and keeps the peer's view unchanged", async () => {
+        const host = await joined("host");
+        const peer = await joined();
+        const peerEvents = recordEvents(peer);
+        expect((await rejection(host.enableCamera({ deviceId: "no-such-camera" }))).code).toBe("device_not_found");
+        expect((await rejection(host.unmute({ deviceId: "no-such-microphone" }))).code).toBe("device_not_found");
+        await flush();
+        expect(host.localMediaState).toEqual({ camera: false, microphone: false, screen: false });
+        expect(eventsOfType(peerEvents, "participant_media_changed")).toEqual([]);
+      });
+
       it("rejects media methods with not_joined before join and after leave, without capturing", async () => {
         const engine = h.createEngine({ role: "host" });
         for (const method of ["enableCamera", "unmute", "startScreenShare", "disableCamera", "mute", "stopScreenShare"] as const) {

@@ -5,6 +5,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-06
+
+Additive under the compatibility policy. `PROTOCOL_VERSION` stays `1`, and every 1.4.0 message is unchanged.
+
+### Added
+
+- `session.welcome` gains optional `iceServersExpireAt` (RFC 3339 UTC): when the credentials in `iceServers` stop being accepted. It is present only when an entry carries credentials. Receivers may treat its presence as support for the messages below.
+- `session.ice_servers` (server to client): `{ iceServers, expiresAt }`. It replaces the connectivity servers used for future connection attempts. A connection that relies on the previous credentials should move to a fresh path before the previous expiry. `iceServers` follows the welcome's rules and may be empty.
+- `webrtc.ice_restart` (both directions, relayed to the target): `{ targetParticipantId }`. It asks the peer that creates offers to restart connectivity checks for the shared connection.
+- `webrtc.connected` gains optional `path`, `localPath`, and `remotePath`, each an open reason code. The known values are `direct` and `relayed`. `path` is `relayed` when either side uses a relay; `localPath` describes the sender's own side and `remotePath` the other participant's side, as seen by the sender.
+- `webrtc.ice_restart_result` (client to server): `{ peerParticipantId, outcome }`, with `outcome` an open reason code. The known values are `completed` and `failed`.
+- Exported types `MediaPath` and `IceRestartOutcome`.
+- Conformance samples for the new fields and types, and for malformed and wrong-direction variants.
+
+## [1.4.0] - 2026-10-04
+
+Additive under the compatibility policy. `PROTOCOL_VERSION` stays `1`, and every 1.3.0 message is unchanged.
+
+### Added
+
+- `session.welcome` gains optional `mediaMode` (`"p2p"` or `"sfu"`) and `iceServers`, which the client uses to set up media. Older clients ignore both. The payload is now `{ role, joinedAt, displayName?, mediaMode?, iceServers? }`.
+- `iceServers` is an array of at most `MAX_ICE_SERVERS` entries `{ urls, username?, credential? }`. `urls` holds 1 to `MAX_ICE_SERVER_URLS` strings starting with `stun:`, `stuns:`, `turn:`, or `turns:`, each at most `MAX_ICE_SERVER_URL_LENGTH` long. `username` and `credential` are bounded by `MAX_ICE_SERVER_USERNAME_LENGTH` and `MAX_ICE_SERVER_CREDENTIAL_LENGTH`. Unknown keys in entries are dropped.
+- Exported types `MediaMode` and `IceServerConfig`, and the new limit constants.
+- Conformance samples for welcomes with media fields, and for malformed ones.
+
 ## [1.3.0] - 2026-10-01
 
 Additive under the compatibility policy. `PROTOCOL_VERSION` stays `1`, and every 1.2.0 message is unchanged.

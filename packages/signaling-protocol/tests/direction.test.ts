@@ -38,6 +38,18 @@ test("clients cannot send session notices", () => {
   }
 });
 
+test("connectivity-server pushes are server-only and restart results are client-only", () => {
+  const push = parseSignalingMessage(validEnvelope("session.ice_servers"), { direction: "client_to_server" });
+  assert.equal(push.ok, false);
+  if (!push.ok) assert.equal(push.error.code, "direction_not_allowed");
+  const result = parseSignalingMessage(validEnvelope("webrtc.ice_restart_result"), { direction: "server_to_client" });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.code, "direction_not_allowed");
+  for (const direction of DIRECTIONS) {
+    assert.equal(parseSignalingMessage(validEnvelope("webrtc.ice_restart"), { direction }).ok, true, direction);
+  }
+});
+
 test("the server cannot emit client-only requests", () => {
   const result = parseSignalingMessage(validEnvelope("participant.join"), { direction: "server_to_client" });
   assert.equal(result.ok, false);

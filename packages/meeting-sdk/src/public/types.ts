@@ -65,6 +65,26 @@ export interface LocalMedia {
   readonly screen: MediaStream | null;
 }
 
+/**
+ * Which device to use for {@link MeetingEngine.enableCamera} or {@link MeetingEngine.unmute}. Omit `deviceId` to use
+ * the browser's default device.
+ */
+export interface MediaDeviceOptions {
+  /** A `deviceId` from `navigator.mediaDevices.enumerateDevices()`. */
+  readonly deviceId?: string;
+}
+
+/** Status of the audio and video connection to another participant. */
+export type MediaConnectionStatus = "connecting" | "connected" | "interrupted" | "failed";
+
+/** Media received from another participant, for rendering. `null` when that media is not available. */
+export interface RemoteMedia {
+  readonly camera: MediaStream | null;
+  readonly microphone: MediaStream | null;
+  /** Always `null` in this version. */
+  readonly screen: MediaStream | null;
+}
+
 /** Why another participant left. Unknown platform reasons are reported as `"other"`. */
 export type ParticipantLeftReason = "left" | "disconnected" | "removed" | "meeting_ended" | "other";
 
@@ -83,6 +103,10 @@ export interface MeetingEventMap {
   participant_reconnected: { readonly participantId: string };
   participant_media_changed: { readonly participantId: string; readonly kind: MediaKind; readonly enabled: boolean };
   local_media_changed: { readonly kind: MediaKind; readonly enabled: boolean; readonly stream: MediaStream | null };
+  /** Media from another participant became available (`stream`) or stopped being available (`null`). */
+  remote_media_changed: { readonly participantId: string; readonly kind: MediaKind; readonly stream: MediaStream | null };
+  /** The audio and video connection to another participant changed. `null`: there is no connection any more. */
+  media_connection_changed: { readonly participantId: string; readonly status: MediaConnectionStatus | null };
   error: { readonly error: MeetingError };
   closed: { readonly reason: CloseReason; readonly error?: MeetingError };
 }
@@ -106,19 +130,32 @@ export interface MeetingEngine {
   /** Current local captures, for rendering. */
   readonly localMedia: LocalMedia;
 
+  /** Media currently received from a participant. All fields are `null` when nothing is available. */
+  remoteMedia(participantId: string): RemoteMedia;
+  /** Status of the audio and video connection to a participant, or `null` when there is none. */
+  mediaConnectionStatus(participantId: string): MediaConnectionStatus | null;
+
   /** Connect and join the meeting. Resolves once admitted and the participant list is known. */
   join(): Promise<void>;
   /** Leave the meeting and release every device. Never rejects. */
   leave(): Promise<void>;
 
-  /** Start the camera. */
-  enableCamera(): Promise<void>;
+  /**
+   * Start the camera. With `options.deviceId`, use that camera; when the camera is already on with another device,
+   * switch to it without turning the camera off. Rejects with `device_not_found` when the device is missing, leaving
+   * the current camera running.
+   */
+  enableCamera(options?: MediaDeviceOptions): Promise<void>;
   /** Stop the camera and release it. */
   disableCamera(): Promise<void>;
   /** Mute the microphone. */
   mute(): Promise<void>;
-  /** Unmute the microphone, capturing it on first use. */
-  unmute(): Promise<void>;
+  /**
+   * Unmute the microphone, capturing it on first use. With `options.deviceId`, use that microphone; when it is already
+   * unmuted with another device, switch to it without muting. Rejects with `device_not_found` when the device is
+   * missing, leaving the current microphone running.
+   */
+  unmute(options?: MediaDeviceOptions): Promise<void>;
   /** Start sharing the screen. Only hosts may share. */
   startScreenShare(): Promise<void>;
   /** Stop sharing the screen. */

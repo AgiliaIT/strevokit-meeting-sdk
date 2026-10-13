@@ -24,6 +24,14 @@ export interface LocalMedia {
 }
 
 // @public
+export type MediaConnectionStatus = "connecting" | "connected" | "interrupted" | "failed";
+
+// @public
+export interface MediaDeviceOptions {
+    readonly deviceId?: string;
+}
+
+// @public
 export type MediaKind = "camera" | "microphone" | "screen";
 
 // @public
@@ -40,19 +48,21 @@ export interface MediaState {
 export interface MeetingEngine {
     disableCamera(): Promise<void>;
     dispose(): void;
-    enableCamera(): Promise<void>;
+    enableCamera(options?: MediaDeviceOptions): Promise<void>;
     join(): Promise<void>;
     leave(): Promise<void>;
     readonly localMedia: LocalMedia;
     readonly localMediaState: MediaState;
+    mediaConnectionStatus(participantId: string): MediaConnectionStatus | null;
     mute(): Promise<void>;
     on<K extends MeetingEventType>(type: K, listener: MeetingEventListener<K>): () => void;
     readonly participants: readonly Participant[];
+    remoteMedia(participantId: string): RemoteMedia;
     readonly self: SelfParticipant | null;
     startScreenShare(): Promise<void>;
     readonly state: ConnectionState;
     stopScreenShare(): Promise<void>;
-    unmute(): Promise<void>;
+    unmute(options?: MediaDeviceOptions): Promise<void>;
 }
 
 // @public
@@ -73,7 +83,7 @@ export class MeetingError extends Error {
 }
 
 // @public
-export type MeetingErrorCode = "join_token_invalid" | "join_token_expired" | "origin_not_allowed" | "connection_failed" | "join_timeout" | "join_cancelled" | "connection_lost" | "session_replaced" | "service_unavailable" | "rate_limited" | "meeting_ended" | "protocol_error" | "already_joined" | "engine_closed" | "not_joined" | "not_permitted" | "permission_denied" | "device_not_found" | "device_unavailable" | "screen_share_cancelled" | "unsupported_environment";
+export type MeetingErrorCode = "join_token_invalid" | "join_token_expired" | "origin_not_allowed" | "connection_failed" | "join_timeout" | "join_cancelled" | "connection_lost" | "session_replaced" | "service_unavailable" | "rate_limited" | "meeting_ended" | "protocol_error" | "already_joined" | "engine_closed" | "not_joined" | "not_permitted" | "permission_denied" | "device_not_found" | "device_unavailable" | "screen_share_cancelled" | "unsupported_environment" | "media_connection_failed" | "media_participant_limit";
 
 // @public
 export type MeetingEventListener<K extends MeetingEventType> = (event: MeetingEventMap[K]) => void;
@@ -100,6 +110,10 @@ export interface MeetingEventMap {
         readonly enabled: boolean;
         readonly stream: MediaStream | null;
     };
+    media_connection_changed: {
+        readonly participantId: string;
+        readonly status: MediaConnectionStatus | null;
+    };
     // (undocumented)
     participant_joined: {
         readonly participant: Participant;
@@ -118,6 +132,11 @@ export interface MeetingEventMap {
     // (undocumented)
     participant_reconnected: {
         readonly participantId: string;
+    };
+    remote_media_changed: {
+        readonly participantId: string;
+        readonly kind: MediaKind;
+        readonly stream: MediaStream | null;
     };
     // (undocumented)
     state_changed: {
@@ -157,6 +176,15 @@ export type ParticipantLeftReason = "left" | "disconnected" | "removed" | "meeti
 
 // @public
 export type ParticipantRole = "host" | "participant";
+
+// @public
+export interface RemoteMedia {
+    // (undocumented)
+    readonly camera: MediaStream | null;
+    // (undocumented)
+    readonly microphone: MediaStream | null;
+    readonly screen: MediaStream | null;
+}
 
 // @public
 export interface SelfParticipant {

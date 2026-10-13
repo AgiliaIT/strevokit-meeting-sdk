@@ -1,6 +1,7 @@
 import { currentEnvironment } from "./internal/env.js";
 import { MeetingEngineImpl } from "./internal/engine.js";
 import { SignalingOnlyMediaDelivery } from "./internal/mediaDelivery.js";
+import { PeerMediaDelivery } from "./internal/peerMediaDelivery.js";
 import { decodeAddressing } from "./internal/token.js";
 import { MeetingError } from "./public/errors.js";
 import type { MeetingEngine, MeetingEngineOptions } from "./public/types.js";
@@ -60,6 +61,7 @@ export function createMeetingEngine(options: MeetingEngineOptions): MeetingEngin
     logger: options.logger,
     addressing,
     env,
-    mediaDelivery: new SignalingOnlyMediaDelivery(),
+    createMediaDelivery: (mediaMode, deps) =>
+      mediaMode === "p2p" ? new PeerMediaDelivery(deps) : new SignalingOnlyMediaDelivery(),
   });
 }

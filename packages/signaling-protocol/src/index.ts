@@ -6,6 +6,11 @@ export {
   MAX_ICE_CANDIDATE_LENGTH,
   MAX_DISPLAY_NAME_CODE_POINTS,
   MAX_REASON_LENGTH,
+  MAX_ICE_SERVERS,
+  MAX_ICE_SERVER_URLS,
+  MAX_ICE_SERVER_URL_LENGTH,
+  MAX_ICE_SERVER_USERNAME_LENGTH,
+  MAX_ICE_SERVER_CREDENTIAL_LENGTH,
 } from "./limits.js";
 export { REJECTION_CODES, REJECTION_DETAILS, SignalingProtocolError } from "./rejection.js";
 export type { RejectionCode, RejectionDetail, SignalingRejection } from "./rejection.js";
@@ -24,6 +29,10 @@ export type {
 export type {
   EmptyPayload,
   IceCandidate,
+  IceRestartOutcome,
+  IceServerConfig,
+  MediaMode,
+  MediaPath,
   ParseOptions,
   ParseResult,
   PayloadMap,

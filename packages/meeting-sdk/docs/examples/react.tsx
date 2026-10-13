@@ -56,6 +56,40 @@ function SelfPreview({ stream }: { stream: MediaStream | null }) {
   return <video ref={ref} autoPlay muted playsInline width={320} />;
 }
 
+function RemoteParticipant({ engine, participantId }: { engine: MeetingEngine; participantId: string }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const audio = useRef<HTMLAudioElement>(null);
+  const [status, setStatus] = useState(() => engine.mediaConnectionStatus(participantId));
+
+  useEffect(() => {
+    const attach = () => {
+      const media = engine.remoteMedia(participantId);
+      if (video.current) video.current.srcObject = media.camera;
+      if (audio.current) audio.current.srcObject = media.microphone;
+    };
+    attach();
+    const unsubscribe = [
+      engine.on("remote_media_changed", (event) => {
+        if (event.participantId === participantId) attach();
+      }),
+      engine.on("media_connection_changed", (event) => {
+        if (event.participantId === participantId) setStatus(event.status);
+      }),
+    ];
+    return () => {
+      for (const off of unsubscribe) off();
+    };
+  }, [engine, participantId]);
+
+  return (
+    <figure>
+      <video ref={video} autoPlay muted playsInline width={320} />
+      <audio ref={audio} autoPlay />
+      <figcaption>{status === "interrupted" ? "Connection lost — reconnecting…" : status}</figcaption>
+    </figure>
+  );
+}
+
 export function Meeting({ token, realtimeUrl }: { token: string; realtimeUrl: string }) {
   const { engine, state, error } = useMeetingEngine(token, realtimeUrl);
   if (!engine) return error ? <p role="alert">{error.message}</p> : null;
@@ -101,6 +135,7 @@ export function Meeting({ token, realtimeUrl }: { token: string; realtimeUrl: st
         {engine.participants.map((participant) => (
           <li key={participant.id}>
             {participant.displayName ?? participant.id} ({participant.role})
+            <RemoteParticipant engine={engine} participantId={participant.id} />
           </li>
         ))}
       </ul>

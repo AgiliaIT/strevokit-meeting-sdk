@@ -22,6 +22,8 @@ const EXPECTED = {
     "webrtc.connected",
     "webrtc.disconnected",
     "webrtc.failed",
+    "webrtc.ice_restart",
+    "webrtc.ice_restart_result",
   ],
   media: [
     "media.camera.started",
@@ -32,7 +34,7 @@ const EXPECTED = {
     "media.screen.stopped",
   ],
   meeting: ["meeting.started", "meeting.ended", "meeting.terminated"],
-  session: ["session.authenticated", "session.welcome", "session.rejected"],
+  session: ["session.authenticated", "session.welcome", "session.rejected", "session.ice_servers"],
 } as const;
 
 const EXPECTED_DIRECTIONS: Record<string, string> = {
@@ -47,6 +49,8 @@ const EXPECTED_DIRECTIONS: Record<string, string> = {
   "webrtc.connected": "client_to_server",
   "webrtc.disconnected": "client_to_server",
   "webrtc.failed": "client_to_server",
+  "webrtc.ice_restart": "both",
+  "webrtc.ice_restart_result": "client_to_server",
   "media.camera.started": "both",
   "media.camera.stopped": "both",
   "media.microphone.started": "both",
@@ -59,11 +63,12 @@ const EXPECTED_DIRECTIONS: Record<string, string> = {
   "session.authenticated": "server_to_client",
   "session.welcome": "server_to_client",
   "session.rejected": "server_to_client",
+  "session.ice_servers": "server_to_client",
 };
 
-test("catalog contains exactly the 23 v1 types", () => {
+test("catalog contains exactly the 26 v1 types", () => {
   const expected = Object.values(EXPECTED).flat();
-  assert.equal(MESSAGE_TYPES.length, 23);
+  assert.equal(MESSAGE_TYPES.length, 26);
   assert.deepEqual([...MESSAGE_TYPES].sort(), [...expected].sort());
 });
 

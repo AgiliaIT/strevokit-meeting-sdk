@@ -79,7 +79,23 @@ await engine.startScreenShare(); // rejects with `not_permitted` if your role ma
 Every media method is idempotent and rejects with a `MeetingError` (for example `permission_denied` or
 `device_not_found`) without changing any state.
 
-### 4. Leave
+### 4. Show other participants
+
+```ts
+engine.on("remote_media_changed", ({ participantId, kind, stream }) => {
+  if (kind === "camera") videoFor(participantId).srcObject = stream; // a <video autoplay playsinline muted>
+  if (kind === "microphone") audioFor(participantId).srcObject = stream; // an <audio autoplay>
+});
+engine.on("media_connection_changed", ({ participantId, status }) => {
+  // "connecting" | "connected" | "interrupted" | "failed", or null when there is no connection any more
+  showStatus(participantId, status);
+});
+```
+
+`stream` is `null` when that media stops being available. `engine.remoteMedia(participantId)` and
+`engine.mediaConnectionStatus(participantId)` return the current values at any time.
+
+### 5. Leave
 
 ```ts
 await engine.leave(); // releases camera, microphone, and screen; then `closed` fires with reason "left"

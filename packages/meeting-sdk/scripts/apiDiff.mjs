@@ -82,6 +82,48 @@ function splitBlock(text) {
   return null;
 }
 
+/** `{ head, params, tail }` for a method member `name(params): type`, or null when the text is not a method. */
+function splitMethod(text) {
+  const open = text.indexOf("(");
+  if (open === -1 || /[:=]/.test(text.slice(0, open))) return null;
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if ("([{<".includes(text[i])) depth++;
+    else if (")]}>".includes(text[i]) && --depth === 0) {
+      return { head: text.slice(0, open), params: splitTopLevel(text.slice(open + 1, i)), tail: text.slice(i + 1) };
+    }
+  }
+  return null;
+}
+
+/** Splits a parameter list at its top-level commas. */
+function splitTopLevel(list) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < list.length; i++) {
+    if ("([{<".includes(list[i])) depth++;
+    else if (")]}>".includes(list[i])) depth--;
+    else if (list[i] === "," && depth === 0) {
+      parts.push(normalize(list.slice(start, i)));
+      start = i + 1;
+    }
+  }
+  const last = normalize(list.slice(start));
+  if (last !== "") parts.push(last);
+  return parts;
+}
+
+/** True when `after` is the method `before` with optional parameters appended: existing calls still compile. */
+function addsOptionalParameters(before, after) {
+  const was = splitMethod(before);
+  const now = splitMethod(after);
+  if (!was || !now || was.head !== now.head || was.tail !== now.tail) return false;
+  if (now.params.length <= was.params.length) return false;
+  if (was.params.some((param, i) => param !== now.params[i])) return false;
+  return now.params.slice(was.params.length).every((param) => /^[\w$]+\?\s*:/.test(param));
+}
+
 function compareMembers(path, previousBody, currentBody, isInput, result) {
   const previous = parseMembers(previousBody);
   const current = parseMembers(currentBody);
@@ -92,6 +134,10 @@ function compareMembers(path, previousBody, currentBody, isInput, result) {
       continue;
     }
     if (before.text === after.text) continue;
+    if (addsOptionalParameters(before.text, after.text)) {
+      result.additive.push(`added optional parameter to ${path}.${key}`);
+      continue;
+    }
     const beforeBlock = splitBlock(before.text);
     const afterBlock = splitBlock(after.text);
     if (beforeBlock && afterBlock && beforeBlock.prefix === afterBlock.prefix) {

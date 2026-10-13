@@ -16,6 +16,7 @@ import {
   type CloseReason,
   type ConnectionState,
   type LocalMedia,
+  type MediaDeviceOptions,
   type MediaKind,
   type MediaState,
   type MeetingEngine,
@@ -59,8 +60,11 @@ async function flow(): Promise<void> {
   try {
     await engine.join();
     await engine.enableCamera();
+    const camera: MediaDeviceOptions = { deviceId: "camera-1" };
+    await engine.enableCamera(camera);
     await engine.disableCamera();
     await engine.unmute();
+    await engine.unmute({ deviceId: "mic-1" });
     await engine.mute();
     await engine.startScreenShare();
     await engine.stopScreenShare();

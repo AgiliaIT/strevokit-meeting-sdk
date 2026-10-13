@@ -2,6 +2,11 @@ import type { MessageType } from "./catalog.js";
 import {
   MAX_DISPLAY_NAME_CODE_POINTS,
   MAX_ICE_CANDIDATE_LENGTH,
+  MAX_ICE_SERVER_CREDENTIAL_LENGTH,
+  MAX_ICE_SERVER_URL_LENGTH,
+  MAX_ICE_SERVER_URLS,
+  MAX_ICE_SERVER_USERNAME_LENGTH,
+  MAX_ICE_SERVERS,
   MAX_REASON_LENGTH,
   MAX_SDP_BYTES,
   MAX_SDP_MID_LENGTH,
@@ -160,6 +165,64 @@ function optionalDisplayName(p: Obj, value: Obj): Obj {
   return value;
 }
 
+const ICE_SERVER_URL_SCHEMES = ["stun:", "stuns:", "turn:", "turns:"] as const;
+
+function optionalBoundedString(obj: Obj, key: string, path: string, maxLength: number, value: Obj): void {
+  if (!hasOwn(obj, key)) return;
+  const raw = obj[key];
+  if (typeof raw !== "string") fail("wrong_type", path);
+  if (raw.length > maxLength) fail("too_long", path);
+  value[key] = raw;
+}
+
+function iceServer(raw: unknown, path: string): Obj {
+  if (!isPlainObject(raw)) fail("wrong_type", path);
+  const urlsPath = `${path}.urls`;
+  const urls = required(raw, "urls", urlsPath);
+  if (!Array.isArray(urls)) fail("wrong_type", urlsPath);
+  if (urls.length === 0 || urls.length > MAX_ICE_SERVER_URLS) fail("out_of_range", urlsPath);
+  const checked = urls.map((url: unknown, index) => {
+    const urlPath = `${urlsPath}.${index}`;
+    if (typeof url !== "string") fail("wrong_type", urlPath);
+    if (url.length > MAX_ICE_SERVER_URL_LENGTH) fail("too_long", urlPath);
+    if (!ICE_SERVER_URL_SCHEMES.some((scheme) => url.startsWith(scheme) && url.length > scheme.length)) {
+      fail("invalid_format", urlPath);
+    }
+    return url;
+  });
+  const value: Obj = { urls: checked };
+  optionalBoundedString(raw, "username", `${path}.username`, MAX_ICE_SERVER_USERNAME_LENGTH, value);
+  optionalBoundedString(raw, "credential", `${path}.credential`, MAX_ICE_SERVER_CREDENTIAL_LENGTH, value);
+  return value;
+}
+
+function iceServers(obj: Obj): Obj[] {
+  const path = "payload.iceServers";
+  const servers = required(obj, "iceServers", path);
+  if (!Array.isArray(servers)) fail("wrong_type", path);
+  if (servers.length > MAX_ICE_SERVERS) fail("too_long", path);
+  return servers.map((server: unknown, index) => iceServer(server, `${path}.${index}`));
+}
+
+function sessionWelcome(p: Obj): Obj {
+  const value = optionalDisplayName(p, {
+    role: role(p),
+    joinedAt: timestamp(p, "joinedAt", "payload.joinedAt"),
+  });
+  if (hasOwn(p, "mediaMode")) {
+    const path = "payload.mediaMode";
+    const mediaMode = p.mediaMode;
+    if (typeof mediaMode !== "string") fail("wrong_type", path);
+    if (mediaMode !== "p2p" && mediaMode !== "sfu") fail("invalid_format", path);
+    value.mediaMode = mediaMode;
+  }
+  if (hasOwn(p, "iceServers")) value.iceServers = iceServers(p);
+  if (hasOwn(p, "iceServersExpireAt")) {
+    value.iceServersExpireAt = timestamp(p, "iceServersExpireAt", "payload.iceServersExpireAt");
+  }
+  return value;
+}
+
 const VALIDATORS: Record<MessageType, Validator> = {
   "participant.join": empty,
   "participant.joined": (p) => optionalDisplayName(p, { role: role(p) }),
@@ -172,11 +235,24 @@ const VALIDATORS: Record<MessageType, Validator> = {
     targetParticipantId: participantRef(p, "targetParticipantId", "payload.targetParticipantId", ctx, false),
     candidate: iceCandidate(p),
   }),
-  "webrtc.connected": peer,
+  "webrtc.connected": (p, ctx) => {
+    const value = peer(p, ctx);
+    for (const key of ["path", "localPath", "remotePath"] as const) {
+      if (hasOwn(p, key)) value[key] = reasonCode(p, key, `payload.${key}`);
+    }
+    return value;
+  },
   "webrtc.disconnected": peer,
   "webrtc.failed": (p, ctx) => ({
     ...peer(p, ctx),
     reason: reasonCode(p, "reason", "payload.reason"),
+  }),
+  "webrtc.ice_restart": (p, ctx) => ({
+    targetParticipantId: participantRef(p, "targetParticipantId", "payload.targetParticipantId", ctx, false),
+  }),
+  "webrtc.ice_restart_result": (p, ctx) => ({
+    ...peer(p, ctx),
+    outcome: reasonCode(p, "outcome", "payload.outcome"),
   }),
   "media.camera.started": empty,
   "media.camera.stopped": empty,
@@ -203,13 +279,16 @@ const VALIDATORS: Record<MessageType, Validator> = {
     reason: reasonCode(p, "reason", "payload.reason"),
   }),
   "session.authenticated": (p) => ({ role: role(p) }),
-  "session.welcome": (p) =>
-    optionalDisplayName(p, { role: role(p), joinedAt: timestamp(p, "joinedAt", "payload.joinedAt") }),
+  "session.welcome": sessionWelcome,
   "session.rejected": (p) => {
     const value: Obj = { code: reasonCode(p, "code", "payload.code") };
     if (hasOwn(p, "detail")) value.detail = reasonCode(p, "detail", "payload.detail");
     return value;
   },
+  "session.ice_servers": (p) => ({
+    iceServers: iceServers(p),
+    expiresAt: timestamp(p, "expiresAt", "payload.expiresAt"),
+  }),
 };
 
 /**

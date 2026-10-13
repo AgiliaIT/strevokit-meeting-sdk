@@ -1,9 +1,17 @@
-import { ROLE_POLICY, type SignalingMessage, isRoleAllowed } from "@strevokit/signaling-protocol";
+import {
+  type IceServerConfig,
+  type MediaMode,
+  ROLE_POLICY,
+  type SignalingMessage,
+  isRoleAllowed,
+} from "@strevokit/signaling-protocol";
 import { MeetingError } from "../public/errors.js";
 import type {
   CloseReason,
   ConnectionState,
   LocalMedia,
+  MediaConnectionStatus,
+  MediaDeviceOptions,
   MediaKind,
   MediaState,
   MeetingEngine,
@@ -13,6 +21,7 @@ import type {
   MeetingLogger,
   Participant,
   ParticipantRole,
+  RemoteMedia,
   SelfParticipant,
 } from "../public/types.js";
 import { Emitter } from "./emitter.js";
@@ -20,7 +29,7 @@ import type { EngineEnvironment, TimerHandle } from "./env.js";
 import { mapClose, mapLeftReason, mapRejection } from "./errorMapping.js";
 import { LocalMediaController } from "./localMedia.js";
 import { Log } from "./log.js";
-import type { MediaDelivery } from "./mediaDelivery.js";
+import { type MediaDelivery, SignalingOnlyMediaDelivery } from "./mediaDelivery.js";
 import { Roster } from "./roster.js";
 import { type OutboundType, SignalingSession } from "./signalingSession.js";
 import type { Addressing } from "./token.js";
@@ -35,8 +44,16 @@ export interface EngineConfig {
   logger: MeetingLogger | undefined;
   addressing: Addressing;
   env: EngineEnvironment;
-  mediaDelivery: MediaDelivery;
+  /** Chooses how media is carried once the welcome says how the platform routes this meeting. */
+  createMediaDelivery: MediaDeliveryFactory;
 }
+
+export type MediaDeliveryFactory = (
+  mediaMode: MediaMode | undefined,
+  deps: { env: EngineEnvironment; log: Log },
+) => MediaDelivery;
+
+const MEDIA_KINDS: readonly MediaKind[] = ["camera", "microphone", "screen"];
 
 type Deferred = { promise: Promise<void>; resolve: () => void; reject: (error: MeetingError) => void };
 
@@ -61,7 +78,8 @@ export class MeetingEngineImpl implements MeetingEngine {
   readonly #joinTimeoutMs: number;
   readonly #addressing: Addressing;
   readonly #env: EngineEnvironment;
-  readonly #delivery: MediaDelivery;
+  readonly #createDelivery: MediaDeliveryFactory;
+  #delivery: MediaDelivery = new SignalingOnlyMediaDelivery();
   readonly #log: Log;
   readonly #emitter: Emitter<MeetingEventMap>;
   readonly #roster = new Roster();
@@ -85,7 +103,7 @@ export class MeetingEngineImpl implements MeetingEngine {
     this.#joinTimeoutMs = config.joinTimeoutMs;
     this.#addressing = config.addressing;
     this.#env = config.env;
-    this.#delivery = config.mediaDelivery;
+    this.#createDelivery = config.createMediaDelivery;
     this.#log = new Log(config.logger);
     this.#emitter = new Emitter(this.#log);
     this.#media = new LocalMediaController(
@@ -119,6 +137,14 @@ export class MeetingEngineImpl implements MeetingEngine {
 
   get localMedia(): LocalMedia {
     return this.#media.streams;
+  }
+
+  remoteMedia(participantId: string): RemoteMedia {
+    return this.#delivery.remoteMedia(participantId);
+  }
+
+  mediaConnectionStatus(participantId: string): MediaConnectionStatus | null {
+    return this.#delivery.connectionStatus(participantId);
   }
 
   join(): Promise<void> {
@@ -168,6 +194,7 @@ export class MeetingEngineImpl implements MeetingEngine {
     const leave = deferred();
     this.#leave = leave;
     this.#media.releaseAll();
+    this.#releaseRemoteMedia();
     this.#setState("leaving");
     if (!this.#is("leaving")) return leave.promise;
     if (!this.#session?.send("participant.leave")) {
@@ -178,8 +205,8 @@ export class MeetingEngineImpl implements MeetingEngine {
     return leave.promise;
   }
 
-  enableCamera(): Promise<void> {
-    return this.#mediaCall("camera", true);
+  enableCamera(options?: MediaDeviceOptions): Promise<void> {
+    return this.#mediaCall("camera", true, options?.deviceId);
   }
 
   disableCamera(): Promise<void> {
@@ -190,8 +217,8 @@ export class MeetingEngineImpl implements MeetingEngine {
     return this.#mediaCall("microphone", false);
   }
 
-  unmute(): Promise<void> {
-    return this.#mediaCall("microphone", true);
+  unmute(options?: MediaDeviceOptions): Promise<void> {
+    return this.#mediaCall("microphone", true, options?.deviceId);
   }
 
   startScreenShare(): Promise<void> {
@@ -222,7 +249,7 @@ export class MeetingEngineImpl implements MeetingEngine {
     this.#leave?.resolve();
   }
 
-  #mediaCall(kind: MediaKind, enabled: boolean): Promise<void> {
+  #mediaCall(kind: MediaKind, enabled: boolean, deviceId?: string): Promise<void> {
     if (this.#state !== "joined") return Promise.reject(new MeetingError("not_joined"));
     if (kind === "screen") {
       const type = enabled ? "media.screen.started" : "media.screen.stopped";
@@ -230,7 +257,7 @@ export class MeetingEngineImpl implements MeetingEngine {
         return Promise.reject(new MeetingError("not_permitted"));
       }
     }
-    return this.#media.set(kind, enabled);
+    return this.#media.set(kind, enabled, typeof deviceId === "string" && deviceId !== "" ? deviceId : undefined);
   }
 
   #announce(kind: MediaKind, enabled: boolean): boolean {
@@ -282,30 +309,49 @@ export class MeetingEngineImpl implements MeetingEngine {
         if (payload.displayName !== undefined) self.displayName = payload.displayName;
         this.#self = Object.freeze(self);
         this.#role = payload.role;
-        this.#delivery.attach({ participantId: this.#addressing.participantId });
         const join = this.#join;
         this.#join = undefined;
         this.#setState("joined");
         this.#emit("joined", { self: this.#self, participants: this.#roster.list() });
         join?.resolve();
+        if (this.#is("joined")) {
+          const expiresAt = payload.iceServersExpireAt !== undefined ? Date.parse(payload.iceServersExpireAt) : NaN;
+          this.#startDelivery(payload.mediaMode, payload.iceServers ?? [], Number.isFinite(expiresAt) ? expiresAt : null);
+        }
+        return;
+      }
+      case "session.ice_servers": {
+        if (!this.#is("joined")) {
+          this.#log.debug("frame ignored", { messageType: message.type, state });
+          return;
+        }
+        const expiresAt = Date.parse(message.payload.expiresAt);
+        if (Number.isFinite(expiresAt)) this.#delivery.iceServersUpdated(message.payload.iceServers, expiresAt);
         return;
       }
       case "participant.joined": {
         if (isSelf || state === "connecting") return;
         const result = this.#roster.upsertJoined(from, message.payload.role, message.payload.displayName);
         const participant = this.#roster.get(from);
-        if (result === "added" && participant) this.#emit("participant_joined", { participant });
+        if (result === "added" && participant) {
+          this.#emit("participant_joined", { participant });
+          const present = this.#roster.committed && this.#is("joined") ? this.#roster.get(from) : undefined;
+          if (present) this.#delivery.peerPresent(from, present.media);
+        }
         return;
       }
       case "participant.left": {
         if (isSelf || state === "connecting") return;
         if (this.#roster.remove(from) && this.#roster.committed) {
+          this.#delivery.peerLeft(from);
           this.#emit("participant_left", { participantId: from, reason: mapLeftReason(message.payload.reason) });
         }
         return;
       }
       case "participant.reconnected": {
-        if (!isSelf && this.#roster.committed) this.#emit("participant_reconnected", { participantId: from });
+        if (isSelf || !this.#roster.committed) return;
+        this.#delivery.peerReconnected(from);
+        this.#emit("participant_reconnected", { participantId: from });
         return;
       }
       case "media.camera.started":
@@ -318,6 +364,7 @@ export class MeetingEngineImpl implements MeetingEngine {
         if (isSelf || state === "connecting" || !change) return;
         if (this.#roster.setMedia(from, change.kind, change.enabled) && this.#roster.committed) {
           this.#emit("participant_media_changed", { participantId: from, kind: change.kind, enabled: change.enabled });
+          this.#delivery.peerMediaChanged(from, change.kind, change.enabled);
         }
         return;
       }
@@ -335,11 +382,52 @@ export class MeetingEngineImpl implements MeetingEngine {
       case "webrtc.offer":
       case "webrtc.answer":
       case "webrtc.ice_candidate":
+      case "webrtc.ice_restart":
         this.#delivery.onPeerFrame(message);
         return;
       default:
         this.#log.debug("frame ignored", { messageType: message.type });
     }
+  }
+
+  #startDelivery(
+    mediaMode: MediaMode | undefined,
+    iceServers: readonly IceServerConfig[],
+    iceServersExpireAt: number | null,
+  ): void {
+    const delivery = this.#createDelivery(mediaMode, { env: this.#env, log: this.#log });
+    this.#delivery = delivery;
+    delivery.attach({
+      participantId: this.#addressing.participantId,
+      iceServers,
+      iceServersExpireAt,
+      send: (type, payload) => this.#delivery === delivery && (this.#session?.sendPeer(type, payload) ?? false),
+      emit: (type, event) => {
+        if (this.#delivery === delivery) this.#emit(type, event);
+      },
+    });
+    const local = this.#media.streams;
+    for (const kind of MEDIA_KINDS) {
+      const stream = local[kind];
+      if (stream) delivery.localMediaChanged(kind, stream);
+    }
+    if (this.#delivery !== delivery || !this.#is("joined")) return;
+    delivery.peersPresent(this.#roster.list().map((participant) => ({ id: participant.id, media: participant.media })));
+  }
+
+  /** Reports every remote media and connection status as gone, then closes the delivery. */
+  #releaseRemoteMedia(): void {
+    const delivery = this.#delivery;
+    for (const participant of this.#roster.list()) {
+      const media = delivery.remoteMedia(participant.id);
+      for (const kind of MEDIA_KINDS) {
+        if (media[kind]) this.#emit("remote_media_changed", { participantId: participant.id, kind, stream: null });
+      }
+      if (delivery.connectionStatus(participant.id) !== null) {
+        this.#emit("media_connection_changed", { participantId: participant.id, status: null });
+      }
+    }
+    delivery.close();
   }
 
   #onRejected(code: string): void {

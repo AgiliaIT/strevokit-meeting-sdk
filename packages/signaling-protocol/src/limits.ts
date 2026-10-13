@@ -16,3 +16,15 @@ export const MAX_REASON_LENGTH = 64 as const;
 export const MAX_SDP_MID_LENGTH = 64 as const;
 export const MAX_USERNAME_FRAGMENT_LENGTH = 256 as const;
 export const MAX_SDP_MLINE_INDEX = 1023 as const;
+
+/** Maximum entries in `session.welcome.iceServers`. */
+export const MAX_ICE_SERVERS = 4 as const;
+
+/** Maximum `urls` per `iceServers` entry. */
+export const MAX_ICE_SERVER_URLS = 4 as const;
+
+/** Maximum length of one `iceServers[].urls` element. */
+export const MAX_ICE_SERVER_URL_LENGTH = 256 as const;
+
+export const MAX_ICE_SERVER_USERNAME_LENGTH = 256 as const;
+export const MAX_ICE_SERVER_CREDENTIAL_LENGTH = 256 as const;

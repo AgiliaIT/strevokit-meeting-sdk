@@ -6,14 +6,21 @@ export class FakeTrack {
   readonly id: string;
   readonly kind: "audio" | "video";
   readonly source: MediaKind;
+  /** The device this track was captured from; `undefined` for screen captures. */
+  readonly deviceId: string | undefined;
   enabled = true;
   readyState: "live" | "ended" = "live";
   readonly #listeners = new Set<TrackListener>();
 
-  constructor(id: string, source: MediaKind) {
+  constructor(id: string, source: MediaKind, deviceId?: string) {
     this.id = id;
     this.source = source;
     this.kind = source === "microphone" ? "audio" : "video";
+    this.deviceId = deviceId;
+  }
+
+  getSettings(): { deviceId?: string } {
+    return this.deviceId === undefined ? {} : { deviceId: this.deviceId };
   }
 
   stop(): void {
@@ -73,9 +80,23 @@ export function makeFailure(name: FailureName, message = "raw browser failure te
 
 type Gate = { release: () => void; promise: Promise<void> };
 
+/** The device a constraint asks for exactly, or `undefined` for "any device". */
+function exactDevice(constraint: boolean | MediaTrackConstraints | undefined): string | undefined {
+  if (typeof constraint !== "object") return undefined;
+  const wanted = constraint.deviceId;
+  if (typeof wanted === "object" && wanted !== null && !Array.isArray(wanted) && "exact" in wanted) {
+    return typeof wanted.exact === "string" ? wanted.exact : undefined;
+  }
+  return undefined;
+}
+
 export class FakeMediaDevices {
   readonly calls = { getUserMedia: 0, getDisplayMedia: 0 };
   readonly tracks: FakeTrack[] = [];
+  /** Every `getUserMedia` constraint, in call order. */
+  readonly constraints: MediaStreamConstraints[] = [];
+  /** Devices present per kind; the first is the browser default. */
+  devices: { camera: string[]; microphone: string[] } = { camera: ["camera-1", "camera-2"], microphone: ["mic-1", "mic-2"] };
   readonly #failures = new Map<MediaKind, FailureName[]>();
   readonly #gates = new Map<MediaKind, Gate[]>();
   #counter = 0;
@@ -116,8 +137,10 @@ export class FakeMediaDevices {
 
   getUserMedia = async (constraints: MediaStreamConstraints): Promise<MediaStream> => {
     this.calls.getUserMedia += 1;
-    const kind: MediaKind = constraints.audio ? "microphone" : "camera";
-    return this.#capture(kind);
+    this.constraints.push(constraints);
+    const kind: "camera" | "microphone" = constraints.audio ? "microphone" : "camera";
+    const wanted = exactDevice(kind === "camera" ? constraints.video : constraints.audio);
+    return this.#capture(kind, wanted);
   };
 
   getDisplayMedia = async (): Promise<MediaStream> => {
@@ -125,13 +148,20 @@ export class FakeMediaDevices {
     return this.#capture("screen");
   };
 
-  async #capture(kind: MediaKind): Promise<MediaStream> {
+  async #capture(kind: MediaKind, wanted?: string): Promise<MediaStream> {
     const gate = this.#gates.get(kind)?.shift();
     if (gate) await gate.promise;
     const failure = this.#failures.get(kind)?.shift();
     if (failure) throw makeFailure(failure);
+    let deviceId: string | undefined;
+    if (kind !== "screen") {
+      const present = this.devices[kind];
+      if (wanted !== undefined && !present.includes(wanted)) throw makeFailure("OverconstrainedError");
+      deviceId = wanted ?? present[0];
+      if (deviceId === undefined) throw makeFailure("NotFoundError");
+    }
     this.#counter += 1;
-    const track = new FakeTrack(`${kind}-track-${this.#counter}`, kind);
+    const track = new FakeTrack(`${kind}-track-${this.#counter}`, kind, deviceId);
     this.tracks.push(track);
     return new FakeStream(`${kind}-stream-${this.#counter}`, [track]) as unknown as MediaStream;
   }
