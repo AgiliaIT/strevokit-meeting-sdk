@@ -7,6 +7,7 @@ import { bin, extract, fail, pack, readJson, root, tempDir } from "./lib.mjs";
 
 const ALLOWED_FILES = new Set(["package.json", "README.md", "CHANGELOG.md", "dist/index.js", "dist/index.js.map", "dist/index.d.ts"]);
 const REQUIRED_FILES = [...ALLOWED_FILES, "docs/api-reference.md"];
+const OPTIONAL_FILES = ["LICENSE"];
 const DEPENDENCY_FIELDS = ["dependencies", "peerDependencies", "optionalDependencies", "bundleDependencies"];
 
 const CONSUMER_SOURCE = `
@@ -119,7 +120,9 @@ const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, encoding: "utf8",
 const output = (error) => `${error.stdout ?? ""}${error.stderr ?? ""}`;
 
 const packed = pack();
-const unexpected = packed.files.filter((file) => !ALLOWED_FILES.has(file) && !file.startsWith("docs/"));
+const unexpected = packed.files.filter(
+  (file) => !ALLOWED_FILES.has(file) && !OPTIONAL_FILES.includes(file) && !file.startsWith("docs/"),
+);
 const missing = REQUIRED_FILES.filter((file) => !packed.files.includes(file));
 if (unexpected.length > 0 || missing.length > 0) {
   fail(`tarball contents wrong. unexpected: [${unexpected.join(", ")}] missing: [${missing.join(", ")}]`);

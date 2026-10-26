@@ -2,7 +2,7 @@
   "name": "@strevokit/meeting-sdk",
   "version": "0.6.0",
   "description": "Embed Strevokit meetings in your web product.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/AgiliaIT/strevokit-meeting-sdk.git",

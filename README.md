@@ -51,4 +51,4 @@ commit it was built from. Release tags are named `meeting-sdk-v<version>`. Chang
 
 ## License
 
-No license has been chosen yet; all rights reserved.
+Licensed under the [Apache License, Version 2.0](./LICENSE).
