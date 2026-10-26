@@ -59,6 +59,7 @@ interface MeetingEngine {
   mediaConnectionStatus(participantId: string): MediaConnectionStatus | null;
   join(): Promise<void>;
   leave(): Promise<void>;
+  endMeeting(): Promise<void>;
   enableCamera(options?: MediaDeviceOptions): Promise<void>;
   disableCamera(): Promise<void>;
   mute(): Promise<void>;
@@ -94,9 +95,10 @@ Both are synchronous reads that never throw. They return the same values the `re
 |---|---|---|---|
 | `join()` | `idle` | Admitted to the meeting and the participant list is received. | `join_token_invalid`, `join_token_expired`, `origin_not_allowed`, `connection_failed`, `join_timeout`, `rate_limited`, `service_unavailable`, `session_replaced`, `meeting_ended`, `not_permitted`, `protocol_error`, `join_cancelled`, `unsupported_environment`, `already_joined` (in `connecting`, `joining`, `joined`, `leaving`), `engine_closed` (in `closed`) |
 | `leave()` | any state | In `idle`/`closed`: immediately. In `leaving`: with the in-flight leave. In `connecting`/`joining`: the join is cancelled (`join()` rejects with `join_cancelled`). In `joined`: when the platform confirms, or after 5 seconds. | never |
+| `endMeeting()` | `joined` | The meeting is ended and every connection is closed. | `not_joined`, `not_permitted`, `service_unavailable`, `rate_limited`, `engine_closed` |
 | `enableCamera(options?)` / `disableCamera()` | `joined` | The camera is on and announced / off and announced. With `options.deviceId` while the camera is on: switched to that camera. | `not_joined`, `permission_denied`, `device_not_found`, `device_unavailable`, `unsupported_environment` |
 | `unmute(options?)` / `mute()` | `joined` | The microphone is live and announced / silenced and announced. With `options.deviceId` while unmuted: switched to that microphone. | same as the camera |
-| `startScreenShare()` / `stopScreenShare()` | `joined` | Screen sharing is on and announced / off and announced. | `not_joined`, `not_permitted` (checked before the browser prompt), `screen_share_cancelled`, `permission_denied`, `device_unavailable`, `unsupported_environment` |
+| `startScreenShare()` / `stopScreenShare()` | `joined` | Screen sharing is on and announced / off and announced. | `not_joined`, `not_permitted` (checked before the browser prompt), `unsupported_environment` (when this meeting cannot deliver screen media, also before the prompt), `screen_share_cancelled`, `permission_denied`, `device_unavailable` |
 | `on(type, listener)` | any state | Returns an unsubscribe function. | never |
 | `dispose()` | any state | Releases devices, the connection, and listeners immediately. Emits nothing. Idempotent. A pending `join()` rejects with `join_cancelled`. | never |
 
@@ -257,8 +259,9 @@ browser's default device. See [Choosing a camera or microphone](#choosing-a-came
 ### `RemoteMedia`
 
 `{ camera: MediaStream | null; microphone: MediaStream | null; screen: MediaStream | null }`. The media received from
-another participant, for a `<video>` (camera) or `<audio>` (microphone) element. `null` when that media is not
-available. `screen` is always `null` in this version.
+another participant, for a `<video>` (camera or screen) or `<audio>` (microphone) element. `null` when that media is
+not available. `screen` is a live display stream while the remote participant is sharing and peer media has attached
+it; otherwise `null`.
 
 ### `MediaConnectionStatus`
 

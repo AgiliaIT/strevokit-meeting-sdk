@@ -109,6 +109,7 @@ const CLOSE_REASONS: Record<number, string> = {
   4001: "invalid_join_token",
   4002: "join_token_expired",
   4003: "origin_not_allowed",
+  4004: "meeting_ended",
   4008: "join_timeout",
   4009: "session_replaced",
   4010: "heartbeat_timeout",
@@ -191,6 +192,8 @@ export class FakeRealtime {
   holdWelcome = false;
   /** When set, `participant.leave` is ignored (no close), to exercise the leave fallback. */
   ignoreLeave = false;
+  /** When set, `meeting.end` is ignored (no close or notification), to exercise the timeout fallback. */
+  ignoreEndMeeting = false;
   /** Sent on every welcome when set. */
   welcomeMediaMode: MediaMode | undefined;
   /** Sent on every welcome when set. */
@@ -429,6 +432,24 @@ export class FakeRealtime {
         if (socket.joined) this.#removeMember(socket, "left");
         this.#finish(socket, 1000, "left");
         return;
+      case "meeting.end": {
+        if (!socket.joined) {
+          this.#reject(socket, "not_joined");
+          return;
+        }
+        if (!isRoleAllowed(message.type, token.role)) {
+          this.#reject(socket, "role_not_allowed");
+          return;
+        }
+        const rejection = this.#rejections.shift();
+        if (rejection !== undefined) {
+          this.#reject(socket, rejection);
+          return;
+        }
+        if (this.ignoreEndMeeting) return;
+        this.endMeeting("ended");
+        return;
+      }
       case "media.camera.started":
       case "media.camera.stopped":
       case "media.microphone.started":

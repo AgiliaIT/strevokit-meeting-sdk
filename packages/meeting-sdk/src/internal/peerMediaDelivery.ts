@@ -25,9 +25,9 @@ type EarlyCandidates = { candidates: IceCandidate[]; timer: TimerHandle };
 type HeldOffer = { from: string; sdp: string; timer: TimerHandle };
 
 /**
- * Carries camera and microphone directly to and from exactly one other participant. Every participant applies the
- * same rule: pair only while exactly one other participant is present, keep a pair once it has connected, and
- * report the participants it does not carry with a non-fatal error.
+ * Carries camera, microphone, and screen directly to and from exactly one other participant. Every participant
+ * applies the same rule: pair only while exactly one other participant is present, keep a pair once it has
+ * connected, and report the participants it does not carry with a non-fatal error.
  */
 export class PeerMediaDelivery implements MediaDelivery {
   readonly #env: EngineEnvironment;
@@ -48,7 +48,7 @@ export class PeerMediaDelivery implements MediaDelivery {
   readonly #limitReported = new Set<string>();
   readonly #early = new Map<string, EarlyCandidates>();
   #heldOffer: HeldOffer | undefined;
-  readonly #local: Record<LocalKind, MediaStreamTrack | null> = { camera: null, microphone: null };
+  readonly #local: Record<LocalKind, MediaStreamTrack | null> = { camera: null, microphone: null, screen: null };
 
   constructor(options: PeerMediaDeliveryOptions) {
     this.#env = options.env;
@@ -157,12 +157,22 @@ export class PeerMediaDelivery implements MediaDelivery {
   }
 
   localMediaChanged(kind: MediaKind, stream: MediaStream | null): void {
-    if (kind === "screen" || this.#closed) return;
+    if (this.#closed) return;
+    if (kind === "screen") {
+      const track = stream?.getVideoTracks()[0] ?? null;
+      this.#local.screen = track;
+      this.#link?.attachLocal("screen", track);
+      return;
+    }
     const track = (kind === "camera" ? stream?.getVideoTracks()[0] : stream?.getAudioTracks()[0]) ?? null;
     // A muted microphone keeps its disabled track on the connection, so it sends silence.
     if (kind === "microphone" && track === null) return;
     this.#local[kind] = track;
     this.#link?.attachLocal(kind, track);
+  }
+
+  supportsScreenShare(): boolean {
+    return this.#active();
   }
 
   remoteMedia(participantId: string): RemoteMedia {
@@ -344,7 +354,11 @@ export class PeerMediaDelivery implements MediaDelivery {
       active,
       usable: active && link.usable,
       announced: this.#present.get(participantId) ?? NOTHING_ANNOUNCED,
-      streams: { camera: link?.remoteStream("camera") ?? null, microphone: link?.remoteStream("microphone") ?? null },
+      streams: {
+        camera: link?.remoteStream("camera") ?? null,
+        microphone: link?.remoteStream("microphone") ?? null,
+        screen: link?.remoteStream("screen") ?? null,
+      },
     });
     this.#remote.update(participantId, next, (event) => this.#emit("remote_media_changed", event));
   }

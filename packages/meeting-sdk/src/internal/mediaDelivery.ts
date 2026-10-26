@@ -46,6 +46,11 @@ export interface MediaDelivery {
   /** Fresh connectivity servers from the platform; `expiresAt` is epoch ms. */
   iceServersUpdated(iceServers: readonly IceServerConfig[], expiresAt: number): void;
   localMediaChanged(kind: MediaKind, stream: MediaStream | null): void;
+  /**
+   * Whether this delivery can carry screen-share media bits to peers. The engine refuses
+   * `startScreenShare` when false, before opening the display-capture prompt.
+   */
+  supportsScreenShare(): boolean;
   remoteMedia(participantId: string): RemoteMedia;
   connectionStatus(participantId: string): MediaConnectionStatus | null;
   /** Closes everything and emits nothing. Idempotent. */
@@ -73,6 +78,10 @@ export class SignalingOnlyMediaDelivery implements MediaDelivery {
   iceServersUpdated(): void {}
 
   localMediaChanged(): void {}
+
+  supportsScreenShare(): boolean {
+    return false;
+  }
 
   remoteMedia(): RemoteMedia {
     return NO_REMOTE_MEDIA;

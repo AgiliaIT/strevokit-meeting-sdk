@@ -41,6 +41,7 @@ export const VALID_PAYLOADS: { [K in MessageType]: PayloadMap[K] } = {
   "meeting.started": { startedAt: "2026-09-28T10:00:00Z" },
   "meeting.ended": { endedAt: "2026-09-28T11:00:00.250Z", endedByParticipantId: BOB },
   "meeting.terminated": { terminatedAt: "2026-09-28T11:30:00Z", reason: "duration_limit" },
+  "meeting.end": {},
   "session.authenticated": { role: "participant" },
   "session.welcome": { role: "host", joinedAt: "2026-09-28T10:00:12.000Z" },
   "session.rejected": { code: "target_not_present" },

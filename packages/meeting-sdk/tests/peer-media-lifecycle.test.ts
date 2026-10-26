@@ -163,6 +163,22 @@ describe("peer media › failures and recovery", () => {
     expect(h.network.open()).toHaveLength(2);
   });
 
+  it("a late joiner receives an active screen share on the first connection", async () => {
+    const { low: hostId, high: lateId } = orderedIds();
+    const host = h.createEngine({ participantId: hostId, role: "host" });
+    await host.join();
+    await host.startScreenShare();
+    const cameraBefore = host.localMediaState.camera;
+    const micBefore = host.localMediaState.microphone;
+    const late = h.createEngine({ participantId: lateId });
+    await late.join();
+    await settle();
+    expect(late.remoteMedia(hostId).screen).not.toBeNull();
+    expect(host.localMediaState.camera).toBe(cameraBefore);
+    expect(host.localMediaState.microphone).toBe(micBefore);
+    expect(sentPeerFrames(h, hostId).filter((f) => f.type === "webrtc.offer")).toHaveLength(1);
+  });
+
   it("leave() closes the connection and clears remote media and status before closed, without a failure report", async () => {
     const { low, highId, lowEvents, lowPc } = await pair({ devices: true });
     const from = lowEvents.length;
@@ -187,6 +203,23 @@ describe("peer media › failures and recovery", () => {
     expect(eventsOfType(after, "remote_media_changed").every((e) => e.participantId === highId && e.stream === null)).toBe(true);
     expect(eventsOfType(after, "media_connection_changed")).toEqual([{ participantId: highId, status: null }]);
     expect(failures()).toEqual([]);
+  });
+
+  it("leaving while sharing clears remote screen for the peer and releases local capture", async () => {
+    const { low: hostId, high: peerId } = orderedIds();
+    const host = h.createEngine({ participantId: hostId, role: "host" });
+    const peer = h.createEngine({ participantId: peerId });
+    await host.join();
+    await peer.join();
+    await settle();
+    await host.startScreenShare();
+    await settle();
+    expect(peer.remoteMedia(hostId).screen).not.toBeNull();
+    await host.leave();
+    await settle();
+    expect(peer.remoteMedia(hostId).screen).toBeNull();
+    expect(h.media.liveTracks("screen")).toBe(0);
+    expect(host.localMediaState.screen).toBe(false);
   });
 
   it("dispose() while connected closes everything silently and leaves nothing running", async () => {

@@ -6,6 +6,25 @@ All notable changes to `@strevokit/meeting-sdk` are documented here. The format 
 
 ## [Unreleased]
 
+## [0.6.0]
+
+Bundles `@strevokit/signaling-protocol` 1.6.0.
+
+### Changed
+
+- Remote `screen` media is delivered in ordinary 1-to-1 peer meetings; shell consumers can render
+  `remoteMedia(id).screen`. When the meeting cannot carry screen bits, `startScreenShare()` rejects with
+  `unsupported_environment` before opening the display-capture prompt.
+
+## [0.5.0]
+
+Bundles `@strevokit/signaling-protocol` 1.6.0.
+
+### Added
+
+- `endMeeting()`: hosts can end the meeting for everyone. Sends `meeting.end` over signaling, resolving when the meeting is ended and every connection closes. Non-hosts reject with `not_permitted`; calls when not joined reject with `not_joined`.
+- Close code 4004 mapped to `meeting_ended`.
+
 ## [0.4.0]
 
 Bundles `@strevokit/signaling-protocol` 1.5.0. No changes are needed in existing integrations.

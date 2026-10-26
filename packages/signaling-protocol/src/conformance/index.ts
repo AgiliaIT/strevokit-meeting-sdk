@@ -96,6 +96,7 @@ export const VALID_SAMPLES: readonly ValidSample[] = Object.freeze([
   valid("meeting.started", "meeting.started", { startedAt: "2026-09-28T10:00:00Z" }),
   valid("meeting.ended", "meeting.ended", { endedAt: "2026-09-28T11:00:00.250Z", endedByParticipantId: BOB }),
   valid("meeting.terminated", "meeting.terminated", { terminatedAt: "2026-09-28T11:30:00Z", reason: "duration_limit" }),
+  valid("meeting.end", "meeting.end", {}),
   valid("session.authenticated", "session.authenticated", { role: "participant" }),
   valid("session.welcome", "session.welcome", { role: "host", joinedAt: "2026-09-28T10:00:12.000Z" }),
   valid("session.welcome with displayName", "session.welcome", {
@@ -241,6 +242,8 @@ export const INVALID_SAMPLES: readonly InvalidSample[] = Object.freeze([
   invalidValue("missing type", withoutKey(join, "type"), "unknown_type", undefined, "type"),
 
   // Direction
+  invalidValue("server sends meeting.end", msg("meeting.end", {}),
+    "direction_not_allowed", undefined, "type", "server_to_client"),
   invalidValue("client sends meeting.ended", msg("meeting.ended", { endedAt: "2026-09-28T11:00:00Z" }),
     "direction_not_allowed", undefined, "type", "client_to_server"),
   invalidValue("client sends participant.joined", msg("participant.joined", { role: "host" }),

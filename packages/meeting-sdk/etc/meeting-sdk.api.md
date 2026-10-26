@@ -49,6 +49,7 @@ export interface MeetingEngine {
     disableCamera(): Promise<void>;
     dispose(): void;
     enableCamera(options?: MediaDeviceOptions): Promise<void>;
+    endMeeting(): Promise<void>;
     join(): Promise<void>;
     leave(): Promise<void>;
     readonly localMedia: LocalMedia;

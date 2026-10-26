@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MeetingEngine } from "../src/public/types.js";
 import type { FakeTrack } from "./support/fakeMediaDevices.js";
 import { flush } from "./support/fakeRealtime.js";
-import { type EngineHarness, createPhase1Harness, eventsOfType, recordEvents } from "./support/harness.js";
+import { type EngineHarness, createP2PHarness, eventsOfType, recordEvents } from "./support/harness.js";
 
 let h: EngineHarness;
 
 beforeEach(() => {
-  h = createPhase1Harness();
+  // Peer delivery is required so startScreenShare is allowed before getDisplayMedia.
+  h = createP2PHarness();
 });
 
 afterEach(() => {

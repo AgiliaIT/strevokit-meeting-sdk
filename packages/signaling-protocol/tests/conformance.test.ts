@@ -3,6 +3,7 @@ import test from "node:test";
 import { INVALID_SAMPLES, VALID_SAMPLES, expectedOutcome } from "../src/conformance/index.js";
 import { MESSAGE_TYPES, REJECTION_CODES, decodeSignalingFrame, parseSignalingMessage } from "../src/index.js";
 import type { ParseResult, ReceiveDirection } from "../src/index.js";
+import { envelope } from "./helpers.js";
 
 const DIRECTIONS: Array<ReceiveDirection | undefined> = [undefined, "client_to_server", "server_to_client"];
 
@@ -65,4 +66,15 @@ test("coverage: every type has a valid sample and every code an invalid sample",
 test("sample names are unique", () => {
   const names = [...VALID_SAMPLES, ...INVALID_SAMPLES].map((sample) => sample.name);
   assert.equal(new Set(names).size, names.length);
+});
+
+test("meeting.end conformance fixtures", () => {
+  const validResult = parseSignalingMessage(envelope("meeting.end", {}));
+  assert.equal(validResult.ok, true, "valid meeting.end should parse");
+
+  const serverToClient = parseSignalingMessage(envelope("meeting.end", {}), { direction: "server_to_client" });
+  assert.equal(serverToClient.ok, false, "server_to_client meeting.end should fail");
+  if (!serverToClient.ok) {
+    assert.equal(serverToClient.error.code, "direction_not_allowed");
+  }
 });

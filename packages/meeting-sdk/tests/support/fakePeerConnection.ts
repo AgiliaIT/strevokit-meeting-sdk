@@ -42,17 +42,20 @@ export class FakeRemoteTrack {
   enabled = true;
   readyState: "live" | "ended" = "live";
   readonly #owner: FakePeerConnection;
+  /** Transceiver index on both sides (audio=0, camera=1, screen=2); two video kinds share `kind`. */
+  readonly #index: number;
 
   constructor(owner: FakePeerConnection, kind: Kind, index: number) {
     this.#owner = owner;
     this.kind = kind;
+    this.#index = index;
     this.id = `${owner.id}-receiver-${index}`;
   }
 
   get source(): FakeTrack | null {
     const linked = this.#owner.linked;
     if (!linked || linked.closed || this.#owner.closed) return null;
-    const transceiver = linked.transceivers.find((t) => t.kind === this.kind);
+    const transceiver = linked.transceivers[this.#index];
     return transceiver?.sender.track ?? null;
   }
 

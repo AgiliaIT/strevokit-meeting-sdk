@@ -278,6 +278,7 @@ const VALIDATORS: Record<MessageType, Validator> = {
     terminatedAt: timestamp(p, "terminatedAt", "payload.terminatedAt"),
     reason: reasonCode(p, "reason", "payload.reason"),
   }),
+  "meeting.end": empty,
   "session.authenticated": (p) => ({ role: role(p) }),
   "session.welcome": sessionWelcome,
   "session.rejected": (p) => {

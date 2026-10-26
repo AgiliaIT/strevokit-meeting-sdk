@@ -5,7 +5,7 @@ import {
   type SignalingMessage,
   isRoleAllowed,
 } from "@strevokit/signaling-protocol";
-import { MeetingError } from "../public/errors.js";
+import { MeetingError, type MeetingErrorCode } from "../public/errors.js";
 import type {
   CloseReason,
   ConnectionState,
@@ -36,6 +36,7 @@ import type { Addressing } from "./token.js";
 
 const LEAVE_FALLBACK_MS = 5000;
 const RESTRICTED_PENDING_MS = 2000;
+const END_MEETING_TIMEOUT_MS = 10_000;
 
 export interface EngineConfig {
   token: string;
@@ -95,6 +96,8 @@ export class MeetingEngineImpl implements MeetingEngine {
   #leave: Deferred | undefined;
   #joinTimer: TimerHandle | undefined;
   #leaveTimer: TimerHandle | undefined;
+  #endMeeting: Deferred | undefined;
+  #endMeetingTimer: TimerHandle | undefined;
   #pendingRestricted: { kind: MediaKind; timer: TimerHandle } | undefined;
 
   constructor(config: EngineConfig) {
@@ -205,6 +208,26 @@ export class MeetingEngineImpl implements MeetingEngine {
     return leave.promise;
   }
 
+  endMeeting(): Promise<void> {
+    if (this.#state !== "joined") return Promise.reject(new MeetingError("not_joined"));
+    if (this.#role !== "host") return Promise.reject(new MeetingError("not_permitted"));
+    if (this.#endMeeting) return this.#endMeeting.promise;
+
+    const pending = deferred();
+    this.#endMeeting = pending;
+    if (!this.#session?.send("meeting.end")) {
+      this.#endMeeting = undefined;
+      return Promise.reject(new MeetingError("service_unavailable"));
+    }
+    this.#endMeetingTimer = this.#env.setTimeout(() => {
+      const p = this.#endMeeting;
+      this.#endMeeting = undefined;
+      this.#endMeetingTimer = undefined;
+      p?.reject(new MeetingError("service_unavailable"));
+    }, END_MEETING_TIMEOUT_MS);
+    return pending.promise;
+  }
+
   enableCamera(options?: MediaDeviceOptions): Promise<void> {
     return this.#mediaCall("camera", true, options?.deviceId);
   }
@@ -238,6 +261,8 @@ export class MeetingEngineImpl implements MeetingEngine {
     if (this.#disposed) return;
     this.#disposed = true;
     this.#emitter.clear();
+    const end = this.#endMeeting;
+    this.#endMeeting = undefined;
     this.#teardown();
     this.#state = "closed";
     const join = this.#join;
@@ -247,6 +272,7 @@ export class MeetingEngineImpl implements MeetingEngine {
       join.reject(new MeetingError("join_cancelled"));
     }
     this.#leave?.resolve();
+    end?.reject(new MeetingError("engine_closed"));
   }
 
   #mediaCall(kind: MediaKind, enabled: boolean, deviceId?: string): Promise<void> {
@@ -255,6 +281,10 @@ export class MeetingEngineImpl implements MeetingEngine {
       const type = enabled ? "media.screen.started" : "media.screen.stopped";
       if (this.#role === undefined || !isRoleAllowed(type, this.#role)) {
         return Promise.reject(new MeetingError("not_permitted"));
+      }
+      // Refuse before getDisplayMedia when this meeting cannot deliver screen bits to peers.
+      if (enabled && !this.#delivery.supportsScreenShare()) {
+        return Promise.reject(new MeetingError("unsupported_environment"));
       }
     }
     return this.#media.set(kind, enabled, typeof deviceId === "string" && deviceId !== "" ? deviceId : undefined);
@@ -376,7 +406,20 @@ export class MeetingEngineImpl implements MeetingEngine {
         return;
       }
       case "session.rejected": {
-        this.#onRejected(message.payload.code);
+        const payload = message.payload as { code: string; detail?: string; ref_type?: string; refType?: string };
+        const isEndMeetingRejection =
+          payload.ref_type === "meeting.end" || payload.refType === "meeting.end" || this.#endMeeting !== undefined;
+        if (this.#endMeeting && isEndMeetingRejection) {
+          const deferred = this.#endMeeting;
+          this.#clearEndMeetingTimer();
+          this.#endMeeting = undefined;
+          let mappedCode: MeetingErrorCode = "service_unavailable";
+          if (payload.code === "role_not_allowed") mappedCode = "not_permitted";
+          else if (payload.code === "rate_limited") mappedCode = "rate_limited";
+          deferred.reject(new MeetingError(mappedCode));
+          return;
+        }
+        this.#onRejected(payload.code);
         return;
       }
       case "webrtc.offer":
@@ -487,15 +530,22 @@ export class MeetingEngineImpl implements MeetingEngine {
 
   #finish(reason: CloseReason, error?: MeetingError): void {
     if (this.#state === "closed") return;
+    const end = this.#endMeeting;
+    this.#endMeeting = undefined;
     this.#teardown();
     this.#setState("closed");
     this.#emit("closed", error ? { reason, error } : { reason });
     this.#leave?.resolve();
+    if (end) {
+      if (reason === "meeting_ended") end.resolve();
+      else end.reject(error ?? new MeetingError("engine_closed"));
+    }
   }
 
   #teardown(): void {
     this.#clearTimer("join");
     this.#clearTimer("leave");
+    this.#clearEndMeetingTimer();
     this.#clearPendingRestricted();
     this.#media.releaseAll();
     this.#delivery.close();
@@ -503,6 +553,11 @@ export class MeetingEngineImpl implements MeetingEngine {
     this.#session = undefined;
     session?.close();
     this.#roster.clear();
+  }
+
+  #clearEndMeetingTimer(): void {
+    if (this.#endMeetingTimer !== undefined) this.#env.clearTimeout(this.#endMeetingTimer);
+    this.#endMeetingTimer = undefined;
   }
 
   #clearTimer(which: "join" | "leave"): void {

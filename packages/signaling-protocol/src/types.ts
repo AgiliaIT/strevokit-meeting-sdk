@@ -69,6 +69,7 @@ export type PayloadMap = {
     terminatedAt: string;
     reason: ReasonCode<"duration_limit" | "admin_action" | "policy" | "system">;
   };
+  "meeting.end": EmptyPayload;
   "session.authenticated": { role: Role };
   "session.welcome": {
     role: Role;

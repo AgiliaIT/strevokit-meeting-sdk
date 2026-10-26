@@ -33,7 +33,7 @@ const EXPECTED = {
     "media.screen.started",
     "media.screen.stopped",
   ],
-  meeting: ["meeting.started", "meeting.ended", "meeting.terminated"],
+  meeting: ["meeting.started", "meeting.ended", "meeting.terminated", "meeting.end"],
   session: ["session.authenticated", "session.welcome", "session.rejected", "session.ice_servers"],
 } as const;
 
@@ -60,23 +60,25 @@ const EXPECTED_DIRECTIONS: Record<string, string> = {
   "meeting.started": "server_to_client",
   "meeting.ended": "server_to_client",
   "meeting.terminated": "server_to_client",
+  "meeting.end": "client_to_server",
   "session.authenticated": "server_to_client",
   "session.welcome": "server_to_client",
   "session.rejected": "server_to_client",
   "session.ice_servers": "server_to_client",
 };
 
-test("catalog contains exactly the 26 v1 types", () => {
+test("catalog contains exactly the 27 v1 types", () => {
   const expected = Object.values(EXPECTED).flat();
-  assert.equal(MESSAGE_TYPES.length, 26);
+  assert.equal(MESSAGE_TYPES.length, 27);
   assert.deepEqual([...MESSAGE_TYPES].sort(), [...expected].sort());
 });
 
 test("every type has the expected family and direction", () => {
+  const catalog = MESSAGE_CATALOG as Record<string, { family: string; direction: string } | undefined>;
   for (const [family, types] of Object.entries(EXPECTED)) {
     for (const type of types) {
-      assert.equal(MESSAGE_CATALOG[type].family, family, type);
-      assert.equal(MESSAGE_CATALOG[type].direction, EXPECTED_DIRECTIONS[type], type);
+      assert.equal(catalog[type]?.family, family, type);
+      assert.equal(catalog[type]?.direction, EXPECTED_DIRECTIONS[type], type);
     }
   }
 });

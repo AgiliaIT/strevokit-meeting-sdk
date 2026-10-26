@@ -24,7 +24,7 @@ export const PATH_RECHECK_INTERVAL_MS = 30_000;
 export type LinkRole = "offerer" | "answerer";
 export type LinkStatus = "connecting" | "connected" | "interrupted" | "failed";
 export type LinkFailure = "connection_failed" | "connection_timeout" | "negotiation_failed";
-export type LocalKind = "camera" | "microphone";
+export type LocalKind = "camera" | "microphone" | "screen";
 export type SwitchOutcome = "completed" | "failed";
 export type RestartReason = "refresh" | "peer_request";
 export interface PeerLinkCallbacks {
@@ -97,7 +97,7 @@ function coarseState(pc: PeerConnectionLike): "connecting" | "connected" | "disc
   }
 }
 
-/** One media connection to one other participant, with fixed audio and video transceivers. */
+/** One media connection to one other participant, with fixed audio, camera, and screen transceivers. */
 export class PeerLink {
   readonly peerId: string;
   readonly role: LinkRole;
@@ -114,7 +114,8 @@ export class PeerLink {
   #offerHandled = false;
   #audio: TransceiverLike | undefined;
   #video: TransceiverLike | undefined;
-  #streams: Record<LocalKind, MediaStream | null> = { camera: null, microphone: null };
+  #screen: TransceiverLike | undefined;
+  #streams: Record<LocalKind, MediaStream | null> = { camera: null, microphone: null, screen: null };
   #timer: TimerHandle | undefined;
   #chain: Promise<void> = Promise.resolve();
   #switch: SwitchState | null = null;
@@ -165,12 +166,13 @@ export class PeerLink {
     return this.#streams[kind];
   }
 
-  /** Offerer: adds the transceivers and sends the offer. */
+  /** Offerer: adds the transceivers (audio → camera → screen) and sends the offer. */
   start(): void {
     if (this.role !== "offerer" || this.#audio) return;
     this.#run(async () => {
       this.#audio = this.#pc.addTransceiver("audio", { direction: "sendrecv" });
       this.#video = this.#pc.addTransceiver("video", { direction: "sendrecv" });
+      this.#screen = this.#pc.addTransceiver("video", { direction: "sendrecv" });
       this.#bindStreams();
       await this.#attachAll();
       const offer = await this.#pc.createOffer();
@@ -198,10 +200,12 @@ export class PeerLink {
     this.#run(async () => {
       await this.#pc.setRemoteDescription({ type: "offer", sdp });
       this.#remoteDescriptionSet = true;
+      // Bind by index: two video m-lines cannot be told apart by track.kind alone.
       const transceivers = this.#pc.getTransceivers();
-      this.#audio = transceivers.find((t) => t.receiver.track.kind === "audio");
-      this.#video = transceivers.find((t) => t.receiver.track.kind === "video");
-      for (const transceiver of [this.#audio, this.#video]) {
+      this.#audio = transceivers[0];
+      this.#video = transceivers[1];
+      this.#screen = transceivers[2];
+      for (const transceiver of [this.#audio, this.#video, this.#screen]) {
         if (transceiver) transceiver.direction = "sendrecv";
       }
       this.#bindStreams();
@@ -326,7 +330,8 @@ export class PeerLink {
   attachLocal(kind: LocalKind, track: MediaStreamTrack | null): void {
     this.#local[kind] = track;
     if (this.#closed) return;
-    const sender = (kind === "camera" ? this.#video : this.#audio)?.sender;
+    const sender =
+      (kind === "camera" ? this.#video : kind === "screen" ? this.#screen : this.#audio)?.sender;
     if (!sender || sender.track === track) return;
     sender.replaceTrack(track).catch(() => {
       this.#log.debug("negotiation step failed", { participantId: this.peerId, kind, reason: "replace_track" });
@@ -484,12 +489,14 @@ export class PeerLink {
     if (!Stream) return;
     if (this.#audio && !this.#streams.microphone) this.#streams.microphone = new Stream([this.#audio.receiver.track]);
     if (this.#video && !this.#streams.camera) this.#streams.camera = new Stream([this.#video.receiver.track]);
+    if (this.#screen && !this.#streams.screen) this.#streams.screen = new Stream([this.#screen.receiver.track]);
   }
 
   async #attachAll(): Promise<void> {
     const pairs: [TransceiverLike | undefined, MediaStreamTrack | null][] = [
       [this.#audio, this.#local.microphone],
       [this.#video, this.#local.camera],
+      [this.#screen, this.#local.screen],
     ];
     for (const [transceiver, track] of pairs) {
       if (transceiver && track && transceiver.sender.track !== track) await transceiver.sender.replaceTrack(track);

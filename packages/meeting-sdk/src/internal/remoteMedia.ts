@@ -10,7 +10,11 @@ export type RemoteMediaInputs = {
   readonly usable: boolean;
   /** What the participant announced through signaling. */
   readonly announced: MediaState;
-  readonly streams: { readonly camera: MediaStream | null; readonly microphone: MediaStream | null };
+  readonly streams: {
+    readonly camera: MediaStream | null;
+    readonly microphone: MediaStream | null;
+    readonly screen: MediaStream | null;
+  };
 };
 
 /** A kind is available when the link to an active participant is usable and the participant announced it on. */
@@ -18,8 +22,9 @@ export function computeRemoteMedia(inputs: RemoteMediaInputs): RemoteMedia {
   if (!inputs.active || !inputs.usable) return NO_REMOTE_MEDIA;
   const camera = inputs.announced.camera ? inputs.streams.camera : null;
   const microphone = inputs.announced.microphone ? inputs.streams.microphone : null;
-  if (camera === null && microphone === null) return NO_REMOTE_MEDIA;
-  return Object.freeze({ camera, microphone, screen: null });
+  const screen = inputs.announced.screen ? inputs.streams.screen : null;
+  if (camera === null && microphone === null && screen === null) return NO_REMOTE_MEDIA;
+  return Object.freeze({ camera, microphone, screen });
 }
 
 type Emit = (event: MeetingEventMap["remote_media_changed"]) => void;

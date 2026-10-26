@@ -19,6 +19,7 @@ export const ABNORMAL_CLOSE = 1006;
 export const OUTBOUND_TYPES = Object.freeze([
   "participant.join",
   "participant.leave",
+  "meeting.end",
   "media.camera.started",
   "media.camera.stopped",
   "media.microphone.started",

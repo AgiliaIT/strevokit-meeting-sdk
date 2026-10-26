@@ -32,6 +32,7 @@ describe("public surface", () => {
       | "mediaConnectionStatus"
       | "join"
       | "leave"
+      | "endMeeting"
       | "enableCamera"
       | "disableCamera"
       | "mute"

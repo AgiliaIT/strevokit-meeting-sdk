@@ -34,6 +34,7 @@ describe("diffApiReports", () => {
       [
         "added MediaConnectionStatus",
         "added MediaDeviceOptions",
+        "added MeetingEngine.endMeeting",
         "added RemoteMedia",
         "added optional parameter to MeetingEngine.enableCamera",
         "added optional parameter to MeetingEngine.unmute",

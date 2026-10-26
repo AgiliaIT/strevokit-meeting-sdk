@@ -34,13 +34,14 @@ describe("peer media › negotiation", () => {
     expect(offer?.payload.targetParticipantId).toBe(highId);
   });
 
-  it("creates one connection per side with two send-and-receive transceivers, audio then video", async () => {
+  it("creates one connection per side with three send-and-receive transceivers, audio then camera then screen", async () => {
     await joinedPair(h);
     const open = h.network.open();
     expect(open).toHaveLength(2);
     for (const pc of open) {
       expect(pc.transceivers.map((t) => [t.kind, t.direction])).toEqual([
         ["audio", "sendrecv"],
+        ["video", "sendrecv"],
         ["video", "sendrecv"],
       ]);
     }

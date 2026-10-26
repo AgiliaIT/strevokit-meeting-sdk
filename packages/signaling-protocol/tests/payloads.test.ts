@@ -583,3 +583,18 @@ test("participant references must be canonical ULIDs and not self", () => {
     ),
   );
 });
+
+test("meeting.end accepts an empty payload and drops undocumented fields", () => {
+  const valid = expectOk(parseSignalingMessage(envelope("meeting.end", {})));
+  assert.deepEqual(valid.payload, {});
+
+  const extra = expectOk(
+    parseSignalingMessage(
+      envelope("meeting.end", {
+        reason: "done",
+        unknownField: 123,
+      }),
+    ),
+  );
+  assert.deepEqual(extra.payload, {});
+});

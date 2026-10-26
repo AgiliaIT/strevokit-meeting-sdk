@@ -124,6 +124,7 @@ describe("outbound frames", () => {
         "media.microphone.stopped",
         "media.screen.started",
         "media.screen.stopped",
+        "meeting.end",
         "participant.join",
         "participant.leave",
       ].sort(),
@@ -136,8 +137,6 @@ describe("outbound frames", () => {
     await engine.join();
     await engine.enableCamera();
     await engine.unmute();
-    await engine.startScreenShare();
-    await engine.stopScreenShare();
     await engine.mute();
     await engine.disableCamera();
     await engine.leave();
@@ -149,6 +148,19 @@ describe("media frames (direct media meetings)", () => {
   beforeEach(() => {
     h.cleanup();
     h = createP2PHarness({ iceServers: [{ urls: ["stun:stun.example.com:3478"] }] });
+  });
+
+  it("never sends invalid frames across a screen share cycle", async () => {
+    const engine = h.createEngine({ role: "host" });
+    await engine.join();
+    await engine.enableCamera();
+    await engine.unmute();
+    await engine.startScreenShare();
+    await engine.stopScreenShare();
+    await engine.mute();
+    await engine.disableCamera();
+    await engine.leave();
+    expect(h.realtime.invalidClientFrames).toEqual([]);
   });
 
   it("every media frame sent during a full run passes client-to-server validation", async () => {

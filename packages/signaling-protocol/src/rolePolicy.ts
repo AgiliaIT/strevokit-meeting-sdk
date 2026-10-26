@@ -7,6 +7,7 @@ const ALL_ROLES: readonly Role[] = Object.freeze(["host", "participant"]);
 export const ROLE_POLICY: Readonly<Partial<Record<MessageType, readonly Role[]>>> = Object.freeze({
   "media.screen.started": Object.freeze(["host"] as Role[]),
   "media.screen.stopped": Object.freeze(["host"] as Role[]),
+  "meeting.end": Object.freeze(["host"] as Role[]),
 });
 
 export function allowedRoles(type: MessageType): readonly Role[] {

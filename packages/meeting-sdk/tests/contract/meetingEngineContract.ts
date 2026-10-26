@@ -374,7 +374,6 @@ export function describeMeetingEngineContract(name: string, makeHarness: () => E
       it.each([
         ["enableCamera", "media.camera.started", "camera", true],
         ["unmute", "media.microphone.started", "microphone", true],
-        ["startScreenShare", "media.screen.started", "screen", true],
       ] as const)("%s announces %s and the peer sees the change", async (method, frame, kind, enabled) => {
         const host = await joined("host");
         const peer = await joined();
@@ -390,7 +389,6 @@ export function describeMeetingEngineContract(name: string, makeHarness: () => E
       it.each([
         ["enableCamera", "disableCamera", "media.camera.stopped", "camera"],
         ["unmute", "mute", "media.microphone.stopped", "microphone"],
-        ["startScreenShare", "stopScreenShare", "media.screen.stopped", "screen"],
       ] as const)("%s then %s announces %s", async (on, off, frame, kind) => {
         const host = await joined("host");
         const peer = await joined();
@@ -404,6 +402,35 @@ export function describeMeetingEngineContract(name: string, makeHarness: () => E
           { participantId: host.self?.id, kind, enabled: false },
         ]);
         expect(host.localMediaState[kind]).toBe(false);
+      });
+
+      it("startScreenShare announces or refuses cleanly without a stuck local share", async () => {
+        const host = await joined("host");
+        const peer = await joined();
+        const peerEvents = recordEvents(peer);
+        const capturesBefore = h.media.calls.getDisplayMedia;
+        try {
+          await host.startScreenShare();
+        } catch (error) {
+          expect(error).toBeInstanceOf(MeetingError);
+          expect((error as MeetingError).code).toBe("unsupported_environment");
+          expect(h.media.calls.getDisplayMedia).toBe(capturesBefore);
+          expect(host.localMediaState.screen).toBe(false);
+          expect(host.localMedia.screen).toBeNull();
+          expect(eventsOfType(peerEvents, "participant_media_changed")).toEqual([]);
+          return;
+        }
+        await flush();
+        expect(h.realtime.socketFor(host.self?.id).sentTypes()).toContain("media.screen.started");
+        expect(eventsOfType(peerEvents, "participant_media_changed")).toEqual([
+          { participantId: host.self?.id, kind: "screen", enabled: true },
+        ]);
+        expect(host.localMediaState.camera).toBe(false);
+        expect(host.localMediaState.microphone).toBe(false);
+        await host.stopScreenShare();
+        await flush();
+        expect(h.realtime.socketFor(host.self?.id).sentTypes()).toContain("media.screen.stopped");
+        expect(host.localMediaState.screen).toBe(false);
       });
 
       it("captures with the 0.3.0 constraints when device options are omitted", async () => {
@@ -451,7 +478,14 @@ export function describeMeetingEngineContract(name: string, makeHarness: () => E
         const host = await joined("host");
         const events = recordEvents(host);
         h.realtime.rejectNext("role_not_allowed");
-        await host.startScreenShare();
+        try {
+          await host.startScreenShare();
+        } catch (error) {
+          // Signaling-only delivery refuses before capture; nothing to roll back.
+          expect(error).toBeInstanceOf(MeetingError);
+          expect((error as MeetingError).code).toBe("unsupported_environment");
+          return;
+        }
         await flush();
         expect(host.localMediaState.screen).toBe(false);
         expect(host.localMedia.screen).toBeNull();
@@ -491,8 +525,15 @@ export function describeMeetingEngineContract(name: string, makeHarness: () => E
         const host = await joined("host");
         await host.enableCamera();
         await host.unmute();
-        await host.startScreenShare();
-        expect(h.media.liveTracks()).toBe(3);
+        let expectedLive = 2;
+        try {
+          await host.startScreenShare();
+          expectedLive = 3;
+        } catch (error) {
+          expect(error).toBeInstanceOf(MeetingError);
+          expect((error as MeetingError).code).toBe("unsupported_environment");
+        }
+        expect(h.media.liveTracks()).toBe(expectedLive);
         await host.leave();
         expect(h.media.liveTracks()).toBe(0);
         expect(host.localMediaState).toEqual({ camera: false, microphone: false, screen: false });
@@ -530,6 +571,85 @@ export function describeMeetingEngineContract(name: string, makeHarness: () => E
         engine.dispose();
         expect((await rejection(join)).code).toBe("join_cancelled");
         expect(events).toEqual([]);
+      });
+    });
+
+    describe("MeetingEngine contract › endMeeting", () => {
+      it("rejects with not_joined before join and after leave, sending nothing", async () => {
+        const engine = h.createEngine({ role: "host" });
+        expect((await rejection(engine.endMeeting())).code).toBe("not_joined");
+        await engine.join();
+        await engine.leave();
+        expect((await rejection(engine.endMeeting())).code).toBe("not_joined");
+        expect(h.realtime.socketFor(engine.self?.id).sentTypes()).not.toContain("meeting.end");
+      });
+
+      it("rejects with not_permitted for non-hosts, sending nothing", async () => {
+        const engine = await joined("participant");
+        expect((await rejection(engine.endMeeting())).code).toBe("not_permitted");
+        expect(h.realtime.socketFor(engine.self?.id).sentTypes()).not.toContain("meeting.end");
+      });
+
+      it("resolves on meeting.ended with closed reason meeting_ended", async () => {
+        const engine = await joined("host");
+        const events = recordEvents(engine);
+        await engine.endMeeting();
+        expect(engine.state).toBe("closed");
+        expect(eventsOfType(events, "closed")).toEqual([{ reason: "meeting_ended" }]);
+      });
+
+      it("resolves on socket close 4004", async () => {
+        const engine = await joined("host");
+        h.realtime.ignoreEndMeeting = true;
+        const pending = engine.endMeeting();
+        h.realtime.closeWith(4004, engine.self?.id);
+        await pending;
+        expect(engine.state).toBe("closed");
+      });
+
+      it.each([
+        ["service_unavailable", "service_unavailable"],
+        ["role_not_allowed", "not_permitted"],
+        ["rate_limited", "rate_limited"],
+      ] as const)("rejects with %s when session.rejected is %s, keeping the meeting joined", async (rejectionCode, expectedErrorCode) => {
+        const engine = await joined("host");
+        h.realtime.rejectNext(rejectionCode);
+        expect((await rejection(engine.endMeeting())).code).toBe(expectedErrorCode);
+        expect(engine.state).toBe("joined");
+      });
+
+      it("rejects with service_unavailable after 10 s timeout, keeping the meeting joined", async () => {
+        vi.useFakeTimers();
+        const engine = await joined("host");
+        h.realtime.ignoreEndMeeting = true;
+        const pending = engine.endMeeting();
+        const rej = rejection(pending);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect((await rej).code).toBe("service_unavailable");
+        expect(engine.state).toBe("joined");
+      });
+
+      it("rejects when the engine closes for another reason while pending", async () => {
+        const engine = await joined("host");
+        h.realtime.ignoreEndMeeting = true;
+        const pending = engine.endMeeting();
+        const rej = rejection(pending);
+        h.realtime.dropWithoutClose(engine.self?.id);
+        await flush();
+        const err = await rej;
+        expect(["connection_lost", "engine_closed"]).toContain(err.code);
+      });
+
+      it("shares one pending promise and sends exactly one meeting.end for concurrent calls", async () => {
+        const engine = await joined("host");
+        h.realtime.ignoreEndMeeting = true;
+        const p1 = engine.endMeeting();
+        const p2 = engine.endMeeting();
+        expect(p1).toBe(p2);
+        const sent = h.realtime.socketFor(engine.self?.id).sentTypes().filter((t) => t === "meeting.end");
+        expect(sent).toHaveLength(1);
+        h.realtime.endMeeting();
+        await Promise.all([p1, p2]);
       });
     });
   });

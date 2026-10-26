@@ -5,6 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-15
+
+Additive under the compatibility policy. `PROTOCOL_VERSION` stays `1`, and every 1.5.0 message is unchanged.
+
+### Added
+
+- `meeting.end` (client to server): `{}`. Sent by a host to end the meeting for all participants.
+- `ROLE_POLICY` restricts `meeting.end` to `host`. A sender with role `participant` receives `session.rejected { code: "role_not_allowed" }`.
+- Conformance samples for `meeting.end` (valid client-sent frame and invalid server-sent `direction_not_allowed`).
+
 ## [1.5.0] - 2026-10-06
 
 Additive under the compatibility policy. `PROTOCOL_VERSION` stays `1`, and every 1.4.0 message is unchanged.

@@ -27,6 +27,7 @@ const CATALOG = {
   "meeting.started": { family: "meeting", direction: "server_to_client" },
   "meeting.ended": { family: "meeting", direction: "server_to_client" },
   "meeting.terminated": { family: "meeting", direction: "server_to_client" },
+  "meeting.end": { family: "meeting", direction: "client_to_server" },
   "session.authenticated": { family: "session", direction: "server_to_client" },
   "session.welcome": { family: "session", direction: "server_to_client" },
   "session.rejected": { family: "session", direction: "server_to_client" },

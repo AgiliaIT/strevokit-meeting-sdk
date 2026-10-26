@@ -2,16 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MESSAGE_TYPES, ROLE_POLICY, allowedRoles, isRoleAllowed, type MessageType, type Role } from "../src/index.js";
 
-const SCREEN: readonly MessageType[] = ["media.screen.started", "media.screen.stopped"];
+const HOST_ONLY: readonly MessageType[] = [
+  "media.screen.started",
+  "media.screen.stopped",
+  "meeting.end" as MessageType,
+];
 
-test("the role policy table is frozen and only restricts screen announcements", () => {
+test("the role policy table is frozen and only restricts host-only types", () => {
   assert.ok(Object.isFrozen(ROLE_POLICY));
-  assert.deepEqual(Object.keys(ROLE_POLICY).sort(), [...SCREEN].sort());
-  for (const type of SCREEN) assert.ok(Object.isFrozen(ROLE_POLICY[type]));
+  assert.deepEqual(Object.keys(ROLE_POLICY).sort(), [...HOST_ONLY].sort());
+  for (const type of HOST_ONLY) {
+    if (type in ROLE_POLICY) assert.ok(Object.isFrozen(ROLE_POLICY[type]));
+  }
 });
 
-test("screen announcements are host-only", () => {
-  for (const type of SCREEN) {
+test("host-only types allow host and refuse participant", () => {
+  for (const type of HOST_ONLY) {
     assert.deepEqual([...allowedRoles(type)], ["host"]);
     assert.equal(isRoleAllowed(type, "host"), true);
     assert.equal(isRoleAllowed(type, "participant"), false);
@@ -20,7 +26,7 @@ test("screen announcements are host-only", () => {
 
 test("every other catalog type allows both roles", () => {
   for (const type of MESSAGE_TYPES) {
-    if (SCREEN.includes(type)) continue;
+    if (HOST_ONLY.includes(type)) continue;
     assert.equal(isRoleAllowed(type, "host"), true, type);
     assert.equal(isRoleAllowed(type, "participant"), true, type);
   }

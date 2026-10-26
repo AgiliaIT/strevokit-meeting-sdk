@@ -81,7 +81,10 @@ export type MediaConnectionStatus = "connecting" | "connected" | "interrupted" |
 export interface RemoteMedia {
   readonly camera: MediaStream | null;
   readonly microphone: MediaStream | null;
-  /** Always `null` in this version. */
+  /**
+   * Live display stream while the remote participant is sharing their screen and peer media has
+   * attached it; otherwise `null`. May be non-null in ordinary one-to-one meetings.
+   */
   readonly screen: MediaStream | null;
 }
 
@@ -139,6 +142,8 @@ export interface MeetingEngine {
   join(): Promise<void>;
   /** Leave the meeting and release every device. Never rejects. */
   leave(): Promise<void>;
+  /** End the meeting for everyone. Only hosts may end a meeting. Resolves once the meeting has ended. */
+  endMeeting(): Promise<void>;
 
   /**
    * Start the camera. With `options.deviceId`, use that camera; when the camera is already on with another device,

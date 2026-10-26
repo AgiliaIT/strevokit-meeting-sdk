@@ -22,6 +22,11 @@ function connections(h: EngineHarness): { lowPc: FakePeerConnection; highPc: Fak
 
 const audioSender = (pc: FakePeerConnection) => pc.transceivers[0]!.sender;
 const videoSender = (pc: FakePeerConnection) => pc.transceivers[1]!.sender;
+const screenSender = (pc: FakePeerConnection) => pc.transceivers[2]!.sender;
+
+function screenTrack(engine: MeetingEngine): FakeTrack {
+  return engine.localMedia.screen?.getVideoTracks()[0] as unknown as FakeTrack;
+}
 
 describe("peer media › local tracks", () => {
   let h: EngineHarness;
@@ -85,13 +90,44 @@ describe("peer media › local tracks", () => {
     expect(high.participants.find((p) => p.id === lowId)?.media.camera).toBe(true);
   });
 
-  it("ignores screen sharing", async () => {
-    const { low } = await joinedPair(h, { devices: false, lowRole: "host" });
+  it("attaches and clears the screen track without renegotiating", async () => {
+    const { low, high, lowId } = await joinedPair(h, { devices: false, lowRole: "host" });
     const { lowPc } = connections(h);
+    const cameraBefore = low.localMediaState.camera;
+    const micBefore = low.localMediaState.microphone;
     await low.startScreenShare();
+    await settle();
+    const track = screenTrack(low);
+    expect(screenSender(lowPc).replaceCalls).toEqual([track]);
+    expect(high.remoteMedia(lowId).screen).not.toBeNull();
+    const received = high.remoteMedia(lowId).screen?.getVideoTracks()[0] as unknown as { source: FakeTrack | null };
+    expect(received.source).toBe(track);
+    expect(low.localMediaState.camera).toBe(cameraBefore);
+    expect(low.localMediaState.microphone).toBe(micBefore);
+    expect(sentPeerFrames(h, lowId).filter((f) => f.type === "webrtc.offer")).toHaveLength(1);
+
     await low.stopScreenShare();
     await settle();
+    expect(screenSender(lowPc).replaceCalls).toEqual([track, null]);
+    expect(screenSender(lowPc).track).toBeNull();
+    expect(high.remoteMedia(lowId).screen).toBeNull();
+    expect(low.localMediaState.camera).toBe(cameraBefore);
+    expect(low.localMediaState.microphone).toBe(micBefore);
+    expect(sentPeerFrames(h, lowId).filter((f) => f.type === "webrtc.offer")).toHaveLength(1);
     for (const sender of [audioSender(lowPc), videoSender(lowPc)]) expect(sender.replaceCalls).toEqual([]);
+  });
+
+  it("delivers screen-only remote media when camera and microphone are off", async () => {
+    const { low, high, lowId } = await joinedPair(h, { devices: false, lowRole: "host" });
+    const events = recordEvents(high, { media: true });
+    await low.startScreenShare();
+    await settle();
+    const screen = high.remoteMedia(lowId).screen;
+    expect(screen).not.toBeNull();
+    expect(high.remoteMedia(lowId)).toEqual({ camera: null, microphone: null, screen });
+    expect(eventsOfType(events, "remote_media_changed").filter((e) => e.kind === "screen")).toEqual([
+      { participantId: lowId, kind: "screen", stream: screen },
+    ]);
   });
 
   it("never sends a second offer across any toggle sequence", async () => {
@@ -223,5 +259,15 @@ describe("local media › ended captures in a signaling-only meeting", () => {
     expect(engine.localMediaState.camera).toBe(false);
     expect(eventsOfType(events, "local_media_changed")).toEqual([{ kind: "camera", enabled: false, stream: null }]);
     expect(h.realtime.socketFor().sentTypes()).toContain("media.camera.stopped");
+  });
+
+  it("refuses startScreenShare before opening display capture", async () => {
+    const engine = h.createEngine({ role: "host" });
+    await engine.join();
+    const capturesBefore = h.media.calls.getDisplayMedia;
+    await expect(engine.startScreenShare()).rejects.toMatchObject({ code: "unsupported_environment" });
+    expect(h.media.calls.getDisplayMedia).toBe(capturesBefore);
+    expect(engine.localMediaState.screen).toBe(false);
+    expect(engine.localMedia.screen).toBeNull();
   });
 });
