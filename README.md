@@ -10,9 +10,10 @@ npm install @strevokit/meeting-sdk
 ```
 
 The quick start, security notes, and browser support are in the
-[package README](./packages/meeting-sdk/README.md). The full API is described in the
+[package README](./packages/meeting-sdk/README.md). Backend routes for create meeting, authorize participants, and
+join tokens are in the [Backend API](./packages/meeting-sdk/docs/backend-api.md). The client API is described in the
 [API reference](./packages/meeting-sdk/docs/api-reference.md), with
-[plain HTML and React examples](./packages/meeting-sdk/docs/examples/).
+[plain HTML, React, and backend examples](./packages/meeting-sdk/docs/examples/).
 
 ## Repository status
 

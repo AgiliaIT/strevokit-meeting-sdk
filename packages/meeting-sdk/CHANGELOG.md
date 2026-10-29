@@ -6,6 +6,12 @@ All notable changes to `@strevokit/meeting-sdk` are documented here. The format 
 
 ## [Unreleased]
 
+### Documentation
+
+- Backend API guide covering `POST /v1/meetings`, `POST /v1/meetings/{public_id}/participants`,
+  `POST /v1/meetings/{public_id}/join-token`, and related embed-origin / get / end routes, with an Express-style
+  integration example.
+
 ## [0.6.0]
 
 Bundles `@strevokit/signaling-protocol` 1.6.0.

@@ -22,23 +22,52 @@ The package is ESM-only and runs in browsers. Use it through a bundler (Vite, we
 
 ## Quick start
 
-### 1. Mint a join token on your backend
+### 1. Prepare the meeting on your backend
 
-Join tokens are short-lived and single-use. Your backend mints one per participant with its Strevokit API credential.
-**Never** send the API credential to the browser.
+Your backend talks to the Strevokit HTTP API with its API credential, then returns only a short-lived join token to the
+browser. **Never** send the API credential to the browser. Full request and response shapes:
+[Backend API](./docs/backend-api.md).
 
 ```ts
-// Server side (for example, a route in your backend).
-const response = await fetch(`https://api.example.com/v1/meetings/${meetingPublicId}/join-token`, {
+// Server side. Headers on every call:
+//   Authorization: Bearer ${process.env.STREVOKIT_API_CREDENTIAL}
+//   Content-Type: application/json
+const api = "https://api.example.com"; // your Strevokit API base URL
+const headers = {
+  Authorization: `Bearer ${process.env.STREVOKIT_API_CREDENTIAL}`,
+  "Content-Type": "application/json",
+};
+
+// Once per environment: allow-list the origin that hosts your page.
+await fetch(`${api}/v1/embed-origins`, {
   method: "POST",
-  headers: {
-    Authorization: `Bearer ${process.env.STREVOKIT_API_CREDENTIAL}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({ participant_public_id: participantPublicId }),
+  headers,
+  body: JSON.stringify({ origin: "https://app.example.com" }),
 });
-const { data } = await response.json(); // { token, expires_at, expires_in }
-// Return data.token to the signed-in user's browser.
+
+// Create the meeting, then authorize each person who may join.
+const { data: meeting } = await fetch(`${api}/v1/meetings`, {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ type: "one_to_one", max_participants: 2 }),
+}).then((r) => r.json());
+
+const { data: participant } = await fetch(`${api}/v1/meetings/${meeting.public_id}/participants`, {
+  method: "POST",
+  headers,
+  body: JSON.stringify({
+    external_user_id: "user_42",
+    display_name: "Alex",
+    role: "host",
+  }),
+}).then((r) => r.json());
+
+// When the signed-in user opens the meeting page, mint a join token and return only data.token.
+const { data } = await fetch(`${api}/v1/meetings/${meeting.public_id}/join-token`, {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ participant_public_id: participant.public_id }),
+}).then((r) => r.json()); // { token, expires_at, expires_in }
 ```
 
 ### 2. Join from the browser
@@ -104,7 +133,8 @@ await engine.leave(); // releases camera, microphone, and screen; then `closed` 
 An engine joins once. To join again, mint a new token and create a new engine. Call `engine.dispose()` when your
 component unmounts; it releases everything immediately and emits nothing.
 
-More examples: [plain HTML](./docs/examples/vanilla.html) and [React](./docs/examples/react.tsx).
+More examples: [plain HTML](./docs/examples/vanilla.html), [React](./docs/examples/react.tsx), and
+[backend integration](./docs/examples/backend-integration.md).
 
 ## Browser support
 
@@ -132,6 +162,8 @@ values generically. See the [changelog](./CHANGELOG.md).
 
 ## Documentation
 
+- [Backend API](./docs/backend-api.md): create meeting, authorize participants, mint join tokens, and related routes
+  (`POST` / `GET` / `DELETE` with request and response shapes).
 - [API reference](./docs/api-reference.md): every export, method, event, error code, and close reason.
 - [Examples](./docs/examples/).
 

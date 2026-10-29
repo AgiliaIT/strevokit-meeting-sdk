@@ -20,7 +20,7 @@
       // With a bundler, import from "@strevokit/meeting-sdk" instead.
       import { createMeetingEngine, MeetingError } from "./node_modules/@strevokit/meeting-sdk/dist/index.js";
 
-      // Ask your backend for a join token; it calls the Strevokit API with its credential.
+      // Ask your backend for a join token (see backend-integration.md and ../backend-api.md).
       const { token } = await fetch("/my-backend/join-token", { method: "POST" }).then((r) => r.json());
 
       const engine = createMeetingEngine({ token, realtimeUrl: "wss://realtime.example.com" });
