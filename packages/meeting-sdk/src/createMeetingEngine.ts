@@ -2,6 +2,7 @@ import { currentEnvironment } from "./internal/env.js";
 import { MeetingEngineImpl } from "./internal/engine.js";
 import { SignalingOnlyMediaDelivery } from "./internal/mediaDelivery.js";
 import { PeerMediaDelivery } from "./internal/peerMediaDelivery.js";
+import { clampReconnectWindowMs } from "./internal/reconnect/recoveryWindow.js";
 import { decodeAddressing } from "./internal/token.js";
 import { MeetingError } from "./public/errors.js";
 import type { MeetingEngine, MeetingEngineOptions } from "./public/types.js";
@@ -54,6 +55,11 @@ export function createMeetingEngine(options: MeetingEngineOptions): MeetingEngin
   const env = currentEnvironment();
   if (!env.WebSocket) throw new MeetingError("unsupported_environment");
   const addressing = decodeAddressing(token);
+  const getJoinToken = options.getJoinToken;
+  if (getJoinToken !== undefined && typeof getJoinToken !== "function") {
+    throw new TypeError("getJoinToken must be a function when provided.");
+  }
+  const reconnectWindowMs = clampReconnectWindowMs(options.reconnectWindowMs);
   return new MeetingEngineImpl({
     token,
     realtimeUrl,
@@ -61,7 +67,11 @@ export function createMeetingEngine(options: MeetingEngineOptions): MeetingEngin
     logger: options.logger,
     addressing,
     env,
+    getJoinToken: typeof getJoinToken === "function" ? getJoinToken : undefined,
+    reconnectWindowMs,
     createMediaDelivery: (mediaMode, deps) =>
-      mediaMode === "p2p" ? new PeerMediaDelivery(deps) : new SignalingOnlyMediaDelivery(),
+      mediaMode === "p2p"
+        ? new PeerMediaDelivery({ ...deps, recoveryWindowMs: reconnectWindowMs })
+        : new SignalingOnlyMediaDelivery(),
   });
 }

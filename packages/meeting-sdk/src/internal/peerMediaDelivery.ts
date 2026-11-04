@@ -4,7 +4,16 @@ import type { MediaConnectionStatus, MediaKind, MediaState, MeetingEventMap, Rem
 import type { EngineEnvironment, TimerHandle } from "./env.js";
 import type { Log } from "./log.js";
 import type { DeliveryEventType, MediaDelivery, MediaDeliveryContext, PresentPeer } from "./mediaDelivery.js";
-import { CONNECTION_TIMEOUT_MS, type LinkFailure, type LinkStatus, type LocalKind, PeerLink, roleFor } from "./peerLink.js";
+import {
+  CONNECTION_TIMEOUT_MS,
+  type LinkFailure,
+  type LinkStatus,
+  type LocalKind,
+  PeerLink,
+  type RecoveryTrigger,
+  roleFor,
+} from "./peerLink.js";
+import { DEFAULT_RECONNECT_WINDOW_MS, reconnectLogFields } from "./reconnect/index.js";
 import { RemoteMediaTracker, computeRemoteMedia } from "./remoteMedia.js";
 
 /** How long frames from a participant not yet usable are kept. */
@@ -19,7 +28,12 @@ export interface PeerMediaDeliveryOptions {
   log: Log;
   /** Not public: tests shorten the time allowed for a first connection. */
   connectionTimeoutMs?: number;
+  /** How long after a connection drops it may still be replaced once. Defaults to the meeting recovery window. */
+  recoveryWindowMs?: number;
 }
+
+/** Media that dropped while the meeting connection stayed up, from the first drop until it connects or is given up. */
+type RecoveryEpisode = { startedAt: number; attempts: number; trigger: RecoveryTrigger; replaced: boolean };
 
 type EarlyCandidates = { candidates: IceCandidate[]; timer: TimerHandle };
 type HeldOffer = { from: string; sdp: string; timer: TimerHandle };
@@ -33,6 +47,9 @@ export class PeerMediaDelivery implements MediaDelivery {
   readonly #env: EngineEnvironment;
   readonly #log: Log;
   readonly #timeoutMs: number;
+  readonly #recoveryWindowMs: number;
+  #episode: RecoveryEpisode | null = null;
+  #unsubscribeNetwork: (() => void) | undefined;
   #context: MediaDeliveryContext | undefined;
   /** The latest server list; links created later use it. */
   #iceServers: readonly IceServerConfig[] = [];
@@ -54,6 +71,7 @@ export class PeerMediaDelivery implements MediaDelivery {
     this.#env = options.env;
     this.#log = options.log;
     this.#timeoutMs = options.connectionTimeoutMs ?? CONNECTION_TIMEOUT_MS;
+    this.#recoveryWindowMs = options.recoveryWindowMs ?? DEFAULT_RECONNECT_WINDOW_MS;
   }
 
   attach(context: MediaDeliveryContext): void {
@@ -65,7 +83,9 @@ export class PeerMediaDelivery implements MediaDelivery {
       this.#inert = true;
       this.#log.warn("media connections unsupported");
       this.#emit("error", { error: new MeetingError("unsupported_environment") });
+      return;
     }
+    this.#unsubscribeNetwork = this.#env.onNetworkChange?.(() => this.#link?.networkChanged());
   }
 
   peersPresent(entries: readonly PresentPeer[]): void {
@@ -186,6 +206,9 @@ export class PeerMediaDelivery implements MediaDelivery {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#unsubscribeNetwork?.();
+    this.#unsubscribeNetwork = undefined;
+    this.#episode = null;
     const link = this.#link;
     this.#link = null;
     link?.close();
@@ -249,11 +272,21 @@ export class PeerMediaDelivery implements MediaDelivery {
       this.#log.debug("frame ignored", { messageType: "webrtc.offer", reason: "offerer" });
       return;
     }
-    const link = this.#link ?? this.#createLink(from);
+    let link = this.#link;
+    if (link?.startsNewSession(sdp)) {
+      // The other side replaced its connection; answer on a fresh one and keep the status as an interruption.
+      const interrupted = link.everConnected;
+      this.#link = null;
+      link.close();
+      if (interrupted) this.#openEpisode("media").replaced = true;
+      link = this.#createLink(from, interrupted ? "interrupted" : "connecting");
+      this.#refreshRemote(from);
+    }
+    link ??= this.#createLink(from);
     link?.acceptOffer(sdp);
   }
 
-  #createLink(peerId: string): PeerLink | null {
+  #createLink(peerId: string, initialStatus: MediaConnectionStatus = "connecting"): PeerLink | null {
     const context = this.#context;
     if (!context) return null;
     let link: PeerLink;
@@ -286,6 +319,9 @@ export class PeerMediaDelivery implements MediaDelivery {
             this.#link === link &&
             this.#serverSupportsRestart &&
             context.send("webrtc.ice_restart", { targetParticipantId: peerId }),
+          recoveryStarted: (trigger) => {
+            if (this.#link === link) this.#recoveryStarted(trigger);
+          },
           switchResult: (outcome) => {
             if (this.#link === link && this.#serverSupportsRestart) {
               context.send("webrtc.ice_restart_result", { peerParticipantId: peerId, outcome });
@@ -299,7 +335,7 @@ export class PeerMediaDelivery implements MediaDelivery {
       return null;
     }
     this.#link = link;
-    this.#setStatus(peerId, "connecting");
+    this.#setStatus(peerId, initialStatus);
     const early = this.#early.get(peerId);
     if (early) {
       this.#dropEarly(peerId);
@@ -312,16 +348,20 @@ export class PeerMediaDelivery implements MediaDelivery {
     const peerParticipantId = link.peerId;
     switch (status) {
       case "connected":
+        this.#recovered(peerParticipantId);
         this.#setStatus(peerParticipantId, "connected");
         this.#refreshRemote(peerParticipantId);
         return;
       case "interrupted":
+        this.#openEpisode("media");
         this.#context?.send("webrtc.disconnected", { peerParticipantId });
         this.#setStatus(peerParticipantId, "interrupted");
         return;
       case "failed":
         this.#link = null;
         link.close();
+        if (this.#replaceFailedLink(link)) return;
+        this.#giveUp(peerParticipantId);
         this.#reportFailure(peerParticipantId, reason ?? "connection_failed");
         return;
       default:
@@ -329,7 +369,75 @@ export class PeerMediaDelivery implements MediaDelivery {
     }
   }
 
-  /** Reports a failed link. The pair stays as it is; nothing is retried until the peer reconnects or rejoins. */
+  #openEpisode(trigger: RecoveryTrigger): RecoveryEpisode {
+    this.#episode ??= { startedAt: this.#env.now(), attempts: 0, trigger, replaced: false };
+    return this.#episode;
+  }
+
+  #recoveryStarted(trigger: RecoveryTrigger): void {
+    const episode = this.#openEpisode(trigger);
+    episode.attempts += 1;
+    episode.trigger = trigger;
+    this.#log.info("reconnect attempt started", reconnectLogFields({ attempt: episode.attempts, trigger }));
+  }
+
+  /** The connection is carrying media again after a drop. */
+  #recovered(peerParticipantId: string): void {
+    const episode = this.#episode;
+    if (!episode) return;
+    this.#episode = null;
+    this.#log.info(
+      "reconnect succeeded",
+      reconnectLogFields({
+        attempt: Math.max(1, episode.attempts),
+        trigger: episode.trigger,
+        elapsedMs: Math.max(0, this.#env.now() - episode.startedAt),
+        participantId: peerParticipantId,
+      }),
+    );
+  }
+
+  /** Recovery is over without media coming back. */
+  #giveUp(peerParticipantId: string): void {
+    const episode = this.#episode;
+    if (!episode) return;
+    this.#episode = null;
+    const elapsedMs = Math.max(0, this.#env.now() - episode.startedAt);
+    this.#log.warn(
+      "reconnect failed",
+      reconnectLogFields({
+        attempt: Math.max(1, episode.attempts),
+        elapsedMs,
+        reason: elapsedMs >= this.#recoveryWindowMs ? "recovery_window_exhausted" : "hard_failure",
+        participantId: peerParticipantId,
+      }),
+    );
+  }
+
+  /**
+   * A connection that carried media and then failed is replaced once, within the recovery window, before media is
+   * given up. The meeting connection is untouched. False when no replacement is allowed or it could not be made.
+   */
+  #replaceFailedLink(failed: PeerLink): boolean {
+    const peerId = failed.peerId;
+    if (!failed.everConnected || peerId !== this.#activeId || !this.#present.has(peerId)) return false;
+    const episode = this.#openEpisode("media");
+    if (episode.replaced || this.#env.now() - episode.startedAt >= this.#recoveryWindowMs) return false;
+    episode.replaced = true;
+    episode.attempts += 1;
+    this.#log.info("reconnect attempt started", reconnectLogFields({ attempt: episode.attempts, trigger: episode.trigger }));
+    const next = this.#createLink(peerId, "interrupted");
+    if (!next) {
+      // Creating the connection failed and was reported as a failure already.
+      this.#episode = null;
+      return true;
+    }
+    this.#refreshRemote(peerId);
+    next.start();
+    return true;
+  }
+
+  /** Reports a failed link. The pair stays as it is; nothing more is tried until the peer reconnects or rejoins. */
   #reportFailure(peerParticipantId: string, reason: LinkFailure): void {
     this.#log.warn("media connection failed", { participantId: peerParticipantId, reason });
     this.#context?.send("webrtc.failed", { peerParticipantId, reason });
@@ -343,6 +451,7 @@ export class PeerMediaDelivery implements MediaDelivery {
     const link = this.#link;
     if (!link) return;
     this.#link = null;
+    this.#episode = null;
     link.close();
     this.#refreshRemote(link.peerId);
   }

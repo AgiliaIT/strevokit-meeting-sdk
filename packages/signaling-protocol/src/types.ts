@@ -97,7 +97,8 @@ export type SessionRejectionCode =
   | "role_not_allowed"
   | "target_not_present"
   | "rate_limited"
-  | "service_unavailable";
+  | "service_unavailable"
+  | "node_draining";
 
 type AssertExact<A, B> = [Exclude<A, B>, Exclude<B, A>] extends [never, never] ? true : never;
 const payloadMapCoversCatalog: AssertExact<keyof PayloadMap, MessageType> = true;

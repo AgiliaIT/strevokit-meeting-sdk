@@ -32,18 +32,21 @@ describe("diffApiReports", () => {
     expect(breaking).toEqual([]);
     expect([...additive].sort()).toEqual(
       [
+        'added ConnectionState "reconnecting"',
         "added MediaConnectionStatus",
         "added MediaDeviceOptions",
         "added MeetingEngine.endMeeting",
+        "added MeetingEngine.mediaConnectionStatus",
+        "added MeetingEngine.remoteMedia",
+        "added MeetingEngineOptions.getJoinToken",
+        "added MeetingEngineOptions.reconnectWindowMs",
+        'added MeetingErrorCode "media_connection_failed"',
+        'added MeetingErrorCode "media_participant_limit"',
+        "added MeetingEventMap.media_connection_changed",
+        "added MeetingEventMap.remote_media_changed",
         "added RemoteMedia",
         "added optional parameter to MeetingEngine.enableCamera",
         "added optional parameter to MeetingEngine.unmute",
-        "added MeetingEngine.mediaConnectionStatus",
-        "added MeetingEngine.remoteMedia",
-        "added MeetingEventMap.media_connection_changed",
-        "added MeetingEventMap.remote_media_changed",
-        'added MeetingErrorCode "media_connection_failed"',
-        'added MeetingErrorCode "media_participant_limit"',
       ].sort(),
     );
   });

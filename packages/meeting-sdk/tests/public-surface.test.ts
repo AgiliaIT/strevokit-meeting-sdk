@@ -90,7 +90,9 @@ describe("public surface", () => {
   });
 
   it("string unions match the contract", () => {
-    expectTypeOf<ConnectionState>().toEqualTypeOf<"idle" | "connecting" | "joining" | "joined" | "leaving" | "closed">();
+    expectTypeOf<ConnectionState>().toEqualTypeOf<
+      "idle" | "connecting" | "joining" | "joined" | "reconnecting" | "leaving" | "closed"
+    >();
     expectTypeOf<ParticipantRole>().toEqualTypeOf<"host" | "participant">();
     expectTypeOf<MediaKind>().toEqualTypeOf<"camera" | "microphone" | "screen">();
     expectTypeOf<ParticipantLeftReason>().toEqualTypeOf<"left" | "disconnected" | "removed" | "meeting_ended" | "other">();

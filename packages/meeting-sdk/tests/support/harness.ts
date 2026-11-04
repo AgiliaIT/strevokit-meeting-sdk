@@ -16,6 +16,8 @@ export interface EngineHarness {
   readonly network: FakePeerNetwork;
   tokenFor(role?: ParticipantRole, participantId?: string): string;
   createEngine(overrides?: EngineOverrides): MeetingEngine;
+  /** Tells every subscribed engine that the browser regained connectivity or changed networks. */
+  signalNetworkChange(): void;
   /** Dispose every engine created by this harness and restore the default environment. */
   cleanup(): void;
 }
@@ -40,6 +42,7 @@ export function createHarness(options: HarnessOptions = {}): EngineHarness {
   const network = new FakePeerNetwork();
   const engines: MeetingEngine[] = [];
   const withPeers = options.peerConnections ?? true;
+  const networkListeners = new Set<() => void>();
   __setTestEnvironment({
     WebSocket: realtime.WebSocket,
     mediaDevices: media,
@@ -48,8 +51,15 @@ export function createHarness(options: HarnessOptions = {}): EngineHarness {
     setTimeout: (callback, ms) => setTimeout(callback, ms),
     clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
     now: () => Date.now(),
+    onNetworkChange: (callback) => {
+      networkListeners.add(callback);
+      return () => networkListeners.delete(callback);
+    },
   });
   return {
+    signalNetworkChange() {
+      for (const listener of [...networkListeners]) listener();
+    },
     realtime,
     media,
     network,

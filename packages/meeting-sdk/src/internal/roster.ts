@@ -90,4 +90,10 @@ export class Roster {
     this.#entries.clear();
     this.#cache = undefined;
   }
+
+  /** Clears participants and returns to the uncommitted (joining) buffer state. */
+  reset(): void {
+    this.clear();
+    this.#committed = false;
+  }
 }

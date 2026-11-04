@@ -30,6 +30,8 @@ Throws synchronously:
 | `realtimeUrl` | `string` | yes | Realtime endpoint base URL, `wss://host[:port]`. `ws://` is accepted only for `localhost` and `127.0.0.1`. No path, query, fragment, or credentials. |
 | `joinTimeoutMs` | `number` | no | How long `join()` waits for admission before rejecting with `join_timeout`. Integer, 1000–60000. Default 15000. |
 | `logger` | `MeetingLogger` | no | Diagnostics sink. Receives short messages and allow-listed fields only. |
+| `getJoinToken` | `() => Promise<string>` | no | Called when automatic recovery needs a fresh join token and the in-memory token cannot be used. Resolve with a token your backend issued for the same participant; reject to end recovery. Kept in memory only and never logged. |
+| `reconnectWindowMs` | `number` | no | Continuous unsuccessful recovery budget in milliseconds. Default `120000`; values outside `1000`–`600000` are clamped. |
 
 ### `MeetingLogger`
 
@@ -137,7 +139,14 @@ the same state **and** the same device. Device IDs are never logged. Read the de
 ## States: `ConnectionState`
 
 ```ts
-type ConnectionState = "idle" | "connecting" | "joining" | "joined" | "leaving" | "closed";
+type ConnectionState =
+  | "idle"
+  | "connecting"
+  | "joining"
+  | "joined"
+  | "reconnecting"
+  | "leaving"
+  | "closed";
 ```
 
 | State | Meaning |
@@ -146,6 +155,7 @@ type ConnectionState = "idle" | "connecting" | "joining" | "joined" | "leaving" 
 | `connecting` | Connecting and presenting the join token. |
 | `joining` | The token was accepted; waiting for the participant list. |
 | `joined` | In the meeting. Media methods are available. |
+| `reconnecting` | Previously joined; automatic recovery of the meeting-service connection is in progress. Success returns to `joined` (same self identity; `joined` is not re-emitted). |
 | `leaving` | `leave()` was called; waiting for the platform to confirm. |
 | `closed` | Finished. The engine cannot be reused; create a new one with a new token. |
 

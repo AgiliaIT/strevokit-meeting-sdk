@@ -6,6 +6,18 @@ All notable changes to `@strevokit/meeting-sdk` are documented here. The format 
 
 ## [Unreleased]
 
+## [0.7.0]
+
+Bundles `@strevokit/signaling-protocol` 1.6.0.
+
+### Added
+
+- Connection state `reconnecting` for automatic meeting-service recovery after an unexpected drop while joined.
+- Optional `getJoinToken` and `reconnectWindowMs` on `MeetingEngineOptions` so hosts can mint a fresh join token
+  during recovery (default recovery window 120 seconds).
+- Media-path recovery while the room connection stays up: restart after a sustained interruption, and one bounded
+  link recreate after a failure within the recovery window.
+
 ### Documentation
 
 - Backend API guide covering `POST /v1/meetings`, `POST /v1/meetings/{public_id}/participants`,

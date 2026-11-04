@@ -30,9 +30,15 @@ import { mapClose, mapLeftReason, mapRejection } from "./errorMapping.js";
 import { LocalMediaController } from "./localMedia.js";
 import { Log } from "./log.js";
 import { type MediaDelivery, SignalingOnlyMediaDelivery } from "./mediaDelivery.js";
+import {
+  ReconnectController,
+  type ReconnectOpenResult,
+  type ReconnectReasonClass,
+  type ReconnectTrigger,
+} from "./reconnect/index.js";
 import { Roster } from "./roster.js";
 import { type OutboundType, SignalingSession } from "./signalingSession.js";
-import type { Addressing } from "./token.js";
+import { decodeAddressing, isJoinTokenUsable, type Addressing } from "./token.js";
 
 const LEAVE_FALLBACK_MS = 5000;
 const RESTRICTED_PENDING_MS = 2000;
@@ -45,6 +51,10 @@ export interface EngineConfig {
   logger: MeetingLogger | undefined;
   addressing: Addressing;
   env: EngineEnvironment;
+  /** Optional callback to mint a fresh join token during automatic recovery. */
+  getJoinToken?: () => Promise<string>;
+  /** Continuous unsuccessful recovery budget in ms. */
+  reconnectWindowMs?: number;
   /** Chooses how media is carried once the welcome says how the platform routes this meeting. */
   createMediaDelivery: MediaDeliveryFactory;
 }
@@ -80,6 +90,9 @@ export class MeetingEngineImpl implements MeetingEngine {
   readonly #addressing: Addressing;
   readonly #env: EngineEnvironment;
   readonly #createDelivery: MediaDeliveryFactory;
+  readonly #getJoinToken: (() => Promise<string>) | undefined;
+  readonly #reconnectWindowMs: number;
+  readonly #logger: MeetingLogger | undefined;
   #delivery: MediaDelivery = new SignalingOnlyMediaDelivery();
   readonly #log: Log;
   readonly #emitter: Emitter<MeetingEventMap>;
@@ -99,6 +112,12 @@ export class MeetingEngineImpl implements MeetingEngine {
   #endMeeting: Deferred | undefined;
   #endMeetingTimer: TimerHandle | undefined;
   #pendingRestricted: { kind: MediaKind; timer: TimerHandle } | undefined;
+  #reconnect: ReconnectController | undefined;
+  #reconnectOpen: Deferred | undefined;
+  #reconnectOutcome: ReconnectOpenResult | undefined;
+  #preRecoveryParticipants: readonly Participant[] | undefined;
+  #pendingAbandonReason: ReconnectReasonClass | undefined;
+  #onVisibility: (() => void) | undefined;
 
   constructor(config: EngineConfig) {
     this.#token = config.token;
@@ -107,6 +126,9 @@ export class MeetingEngineImpl implements MeetingEngine {
     this.#addressing = config.addressing;
     this.#env = config.env;
     this.#createDelivery = config.createMediaDelivery;
+    this.#getJoinToken = config.getJoinToken;
+    this.#reconnectWindowMs = config.reconnectWindowMs ?? 120_000;
+    this.#logger = config.logger;
     this.#log = new Log(config.logger);
     this.#emitter = new Emitter(this.#log);
     this.#media = new LocalMediaController(
@@ -120,6 +142,7 @@ export class MeetingEngineImpl implements MeetingEngine {
       },
       this.#log,
     );
+    this.#installVisibilityListener();
   }
 
   get state(): ConnectionState {
@@ -154,7 +177,6 @@ export class MeetingEngineImpl implements MeetingEngine {
     if (this.#state === "closed") return Promise.reject(new MeetingError("engine_closed"));
     if (this.#state !== "idle") return Promise.reject(new MeetingError("already_joined"));
     const token = this.#token;
-    this.#token = undefined;
     if (!this.#env.WebSocket || token === undefined) return Promise.reject(new MeetingError("unsupported_environment"));
 
     const join = deferred();
@@ -163,20 +185,7 @@ export class MeetingEngineImpl implements MeetingEngine {
     if (!this.#is("connecting")) return join.promise;
 
     this.#joinTimer = this.#env.setTimeout(() => this.#failJoin(new MeetingError("join_timeout")), this.#joinTimeoutMs);
-    const session = new SignalingSession({
-      env: this.#env,
-      realtimeUrl: this.#realtimeUrl,
-      token,
-      addressing: this.#addressing,
-      log: this.#log,
-      callbacks: {
-        onMessage: (message) => this.#onMessage(message),
-        onProtocolError: () => this.#onProtocolError(),
-        onClose: (code) => this.#onClose(session, code),
-      },
-    });
-    this.#session = session;
-    session.open();
+    this.#openSession(token);
     return join.promise;
   }
 
@@ -190,6 +199,10 @@ export class MeetingEngineImpl implements MeetingEngine {
       case "connecting":
       case "joining":
         this.#failJoin(new MeetingError("join_cancelled"));
+        return Promise.resolve();
+      case "reconnecting":
+        this.#cancelReconnect("left");
+        this.#finish("left");
         return Promise.resolve();
       case "joined":
         break;
@@ -260,9 +273,11 @@ export class MeetingEngineImpl implements MeetingEngine {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    this.#removeVisibilityListener();
     this.#emitter.clear();
     const end = this.#endMeeting;
     this.#endMeeting = undefined;
+    this.#cancelReconnect("hard_failure");
     this.#teardown();
     this.#state = "closed";
     const join = this.#join;
@@ -319,34 +334,45 @@ export class MeetingEngineImpl implements MeetingEngine {
 
     switch (message.type) {
       case "session.authenticated": {
-        if (state !== "connecting") return;
-        this.#role = message.payload.role;
-        this.#setState("joining");
-        if (!this.#is("joining")) return;
-        if (!this.#session?.send("participant.join")) this.#failJoin(new MeetingError("connection_failed"));
+        if (state === "connecting") {
+          this.#role = message.payload.role;
+          this.#setState("joining");
+          if (!this.#is("joining")) return;
+          if (!this.#session?.send("participant.join")) this.#failJoin(new MeetingError("connection_failed"));
+          return;
+        }
+        if (state === "reconnecting") {
+          this.#role = message.payload.role;
+          if (!this.#session?.send("participant.join")) this.#failReconnectOpen(new MeetingError("connection_failed"));
+        }
         return;
       }
       case "session.welcome": {
-        if (state !== "joining") return;
-        this.#clearTimer("join");
-        this.#roster.commit();
-        const payload = message.payload;
-        const self: { id: string; role: ParticipantRole; joinedAt: string; displayName?: string } = {
-          id: this.#addressing.participantId,
-          role: payload.role,
-          joinedAt: payload.joinedAt,
-        };
-        if (payload.displayName !== undefined) self.displayName = payload.displayName;
-        this.#self = Object.freeze(self);
-        this.#role = payload.role;
-        const join = this.#join;
-        this.#join = undefined;
-        this.#setState("joined");
-        this.#emit("joined", { self: this.#self, participants: this.#roster.list() });
-        join?.resolve();
-        if (this.#is("joined")) {
-          const expiresAt = payload.iceServersExpireAt !== undefined ? Date.parse(payload.iceServersExpireAt) : NaN;
-          this.#startDelivery(payload.mediaMode, payload.iceServers ?? [], Number.isFinite(expiresAt) ? expiresAt : null);
+        if (state === "joining") {
+          this.#clearTimer("join");
+          this.#roster.commit();
+          const payload = message.payload;
+          const self: { id: string; role: ParticipantRole; joinedAt: string; displayName?: string } = {
+            id: this.#addressing.participantId,
+            role: payload.role,
+            joinedAt: payload.joinedAt,
+          };
+          if (payload.displayName !== undefined) self.displayName = payload.displayName;
+          this.#self = Object.freeze(self);
+          this.#role = payload.role;
+          const join = this.#join;
+          this.#join = undefined;
+          this.#setState("joined");
+          this.#emit("joined", { self: this.#self, participants: this.#roster.list() });
+          join?.resolve();
+          if (this.#is("joined")) {
+            const expiresAt = payload.iceServersExpireAt !== undefined ? Date.parse(payload.iceServersExpireAt) : NaN;
+            this.#startDelivery(payload.mediaMode, payload.iceServers ?? [], Number.isFinite(expiresAt) ? expiresAt : null);
+          }
+          return;
+        }
+        if (state === "reconnecting") {
+          this.#completeReconnectWelcome(message);
         }
         return;
       }
@@ -362,6 +388,8 @@ export class MeetingEngineImpl implements MeetingEngine {
       case "participant.joined": {
         if (isSelf || state === "connecting") return;
         const result = this.#roster.upsertJoined(from, message.payload.role, message.payload.displayName);
+        // During recovery, snapshot frames rebuild the roster quietly (no leave/join flash).
+        if (state === "reconnecting") return;
         const participant = this.#roster.get(from);
         if (result === "added" && participant) {
           this.#emit("participant_joined", { participant });
@@ -371,7 +399,7 @@ export class MeetingEngineImpl implements MeetingEngine {
         return;
       }
       case "participant.left": {
-        if (isSelf || state === "connecting") return;
+        if (isSelf || state === "connecting" || state === "reconnecting") return;
         if (this.#roster.remove(from) && this.#roster.committed) {
           this.#delivery.peerLeft(from);
           this.#emit("participant_left", { participantId: from, reason: mapLeftReason(message.payload.reason) });
@@ -380,6 +408,13 @@ export class MeetingEngineImpl implements MeetingEngine {
       }
       case "participant.reconnected": {
         if (isSelf || !this.#roster.committed) return;
+        // Presence may have removed the peer briefly before the supersede frame arrives — restore one entry.
+        if (!this.#roster.get(from)) {
+          this.#roster.upsertJoined(from, "participant");
+          const restored = this.#roster.get(from);
+          // Do not emit participant_joined: reconnect frames lack authoritative role/displayName.
+          if (restored && this.#is("joined")) this.#delivery.peerPresent(from, restored.media);
+        }
         this.#delivery.peerReconnected(from);
         this.#emit("participant_reconnected", { participantId: from });
         return;
@@ -402,7 +437,10 @@ export class MeetingEngineImpl implements MeetingEngine {
       case "meeting.terminated": {
         this.#log.info("meeting ended", { messageType: message.type });
         if (state === "connecting" || state === "joining") this.#failJoin(new MeetingError("meeting_ended"));
-        else this.#finish("meeting_ended");
+        else {
+          this.#cancelReconnect("meeting_ended");
+          this.#finish("meeting_ended");
+        }
         return;
       }
       case "session.rejected": {
@@ -410,13 +448,13 @@ export class MeetingEngineImpl implements MeetingEngine {
         const isEndMeetingRejection =
           payload.ref_type === "meeting.end" || payload.refType === "meeting.end" || this.#endMeeting !== undefined;
         if (this.#endMeeting && isEndMeetingRejection) {
-          const deferred = this.#endMeeting;
+          const pending = this.#endMeeting;
           this.#clearEndMeetingTimer();
           this.#endMeeting = undefined;
           let mappedCode: MeetingErrorCode = "service_unavailable";
           if (payload.code === "role_not_allowed") mappedCode = "not_permitted";
           else if (payload.code === "rate_limited") mappedCode = "rate_limited";
-          deferred.reject(new MeetingError(mappedCode));
+          pending.reject(new MeetingError(mappedCode));
           return;
         }
         this.#onRejected(payload.code);
@@ -479,6 +517,13 @@ export class MeetingEngineImpl implements MeetingEngine {
       this.#failJoin(error);
       return;
     }
+    if (this.#state === "reconnecting" && this.#reconnectOpen) {
+      const session = this.#session;
+      this.#session = undefined;
+      session?.close();
+      this.#failReconnectOpen(error, error.retryable);
+      return;
+    }
     if (code === "role_not_allowed") {
       const pending = this.#pendingRestricted;
       this.#clearPendingRestricted();
@@ -506,7 +551,34 @@ export class MeetingEngineImpl implements MeetingEngine {
       }
       case "joined": {
         const { reason, error } = mapClose(code, "after_joined");
+        if (reason === "left" || reason === "meeting_ended" || reason === "session_replaced") {
+          this.#finish(reason, error);
+          return;
+        }
+        if (this.#isRecoverableClose(reason, error)) {
+          this.#beginRecovery("meeting_service");
+          return;
+        }
         this.#finish(reason, error);
+        return;
+      }
+      case "reconnecting": {
+        const { reason, error } = mapClose(code, "after_joined");
+        if (reason === "meeting_ended" || reason === "session_replaced") {
+          this.#cancelReconnect(reason === "meeting_ended" ? "meeting_ended" : "session_replaced");
+          this.#finish(reason, error);
+          return;
+        }
+        if (reason === "left") {
+          this.#cancelReconnect("left");
+          this.#finish("left");
+          return;
+        }
+        // Token failures clear the in-memory token so the next attempt can call getJoinToken.
+        const tokenFailure = error?.code === "join_token_expired" || error?.code === "join_token_invalid";
+        if (tokenFailure) this.#token = undefined;
+        const retry = tokenFailure || this.#isRecoverableClose(reason, error);
+        this.#failReconnectOpen(error ?? new MeetingError("connection_lost"), retry);
         return;
       }
       case "leaving":
@@ -532,6 +604,15 @@ export class MeetingEngineImpl implements MeetingEngine {
     if (this.#state === "closed") return;
     const end = this.#endMeeting;
     this.#endMeeting = undefined;
+    this.#cancelReconnect(
+      reason === "meeting_ended"
+        ? "meeting_ended"
+        : reason === "session_replaced"
+          ? "session_replaced"
+          : reason === "left"
+            ? "left"
+            : "hard_failure",
+    );
     this.#teardown();
     this.#setState("closed");
     this.#emit("closed", error ? { reason, error } : { reason });
@@ -553,6 +634,247 @@ export class MeetingEngineImpl implements MeetingEngine {
     this.#session = undefined;
     session?.close();
     this.#roster.clear();
+    this.#reconnectOpen = undefined;
+    this.#reconnectOutcome = undefined;
+    this.#preRecoveryParticipants = undefined;
+  }
+
+  #isRecoverableClose(reason: CloseReason, error: MeetingError | undefined): boolean {
+    if (reason === "connection_lost") return true;
+    if (reason === "error" && error?.code === "service_unavailable") return true;
+    return false;
+  }
+
+  #beginRecovery(trigger: ReconnectTrigger): void {
+    if (this.#state !== "joined" && this.#state !== "reconnecting") return;
+    if (this.#endMeeting) {
+      const end = this.#endMeeting;
+      this.#endMeeting = undefined;
+      this.#clearEndMeetingTimer();
+      end.reject(new MeetingError("connection_lost"));
+    }
+    // Capture once before the first reset so later attempts do not overwrite with an empty roster.
+    if (this.#state === "joined") this.#preRecoveryParticipants = this.#roster.list();
+    this.#pauseDeliveryForRecovery();
+    this.#setState("reconnecting");
+    if (!this.#is("reconnecting")) return;
+    if (!this.#reconnect) {
+      this.#reconnect = new ReconnectController({
+        env: this.#env,
+        logger: this.#logger,
+        windowMs: this.#reconnectWindowMs,
+        open: () => this.#reconnectOpenAttempt(),
+        onAbandoned: (reason) => this.#onReconnectAbandoned(reason),
+      });
+    }
+    this.#reconnect.start(trigger);
+  }
+
+  #pauseDeliveryForRecovery(): void {
+    const delivery = this.#delivery;
+    for (const participant of this.#roster.list()) {
+      const media = delivery.remoteMedia(participant.id);
+      for (const kind of MEDIA_KINDS) {
+        if (media[kind]) this.#emit("remote_media_changed", { participantId: participant.id, kind, stream: null });
+      }
+      if (delivery.connectionStatus(participant.id) !== null) {
+        this.#emit("media_connection_changed", { participantId: participant.id, status: null });
+      }
+    }
+    delivery.close();
+    this.#delivery = new SignalingOnlyMediaDelivery();
+  }
+
+  async #reconnectOpenAttempt(): Promise<ReconnectOpenResult> {
+    if (this.#state !== "reconnecting" || this.#disposed) return "cancelled";
+    let token: string;
+    try {
+      token = await this.#resolveReconnectToken();
+    } catch (error) {
+      const meetingError = error instanceof MeetingError ? error : new MeetingError("join_token_invalid");
+      this.#log.warn("reconnect token refresh failed", { code: meetingError.code });
+      this.#pendingAbandonReason = "token_refresh_failed";
+      return "failed";
+    }
+    this.#roster.reset();
+    this.#reconnectOutcome = undefined;
+    const open = deferred();
+    this.#reconnectOpen = open;
+    const attemptTimer = this.#env.setTimeout(() => {
+      if (this.#reconnectOpen !== open) return;
+      const session = this.#session;
+      this.#session = undefined;
+      session?.close();
+      this.#failReconnectOpen(new MeetingError("join_timeout"), true);
+    }, this.#joinTimeoutMs);
+    this.#openSession(token);
+    try {
+      await open.promise;
+    } catch {
+      // Outcome recorded below.
+    } finally {
+      this.#env.clearTimeout(attemptTimer);
+    }
+    if (this.#state !== "reconnecting" && this.#state !== "joined") {
+      return this.#reconnectOutcome ?? "cancelled";
+    }
+    return this.#reconnectOutcome ?? "failed";
+  }
+
+  async #resolveReconnectToken(): Promise<string> {
+    const current = this.#token;
+    if (current !== undefined && isJoinTokenUsable(current, this.#env.now())) return current;
+    const refresh = this.#getJoinToken;
+    if (!refresh) throw new MeetingError("join_token_expired");
+    const next = await refresh();
+    if (typeof next !== "string" || next.length === 0) throw new MeetingError("join_token_invalid");
+    const addressing = decodeAddressing(next);
+    if (
+      addressing.meetingId !== this.#addressing.meetingId ||
+      addressing.participantId !== this.#addressing.participantId
+    ) {
+      throw new MeetingError("join_token_invalid");
+    }
+    this.#token = next;
+    return next;
+  }
+
+  #openSession(token: string): void {
+    const session = new SignalingSession({
+      env: this.#env,
+      realtimeUrl: this.#realtimeUrl,
+      token,
+      addressing: this.#addressing,
+      log: this.#log,
+      callbacks: {
+        onMessage: (message) => this.#onMessage(message),
+        onProtocolError: () => this.#onProtocolError(),
+        onClose: (code) => this.#onClose(session, code),
+      },
+    });
+    this.#session = session;
+    session.open();
+  }
+
+  #completeReconnectWelcome(message: SignalingMessage & { type: "session.welcome" }): void {
+    const payload = message.payload;
+    if (message.participantId !== this.#addressing.participantId) {
+      this.#failReconnectOpen(new MeetingError("protocol_error"));
+      return;
+    }
+    // Snapshot peers arrived as participant.joined frames while reconnecting; commit, join, then emit ID diffs.
+    this.#roster.commit();
+    const self: { id: string; role: ParticipantRole; joinedAt: string; displayName?: string } = {
+      id: this.#addressing.participantId,
+      role: payload.role,
+      joinedAt: payload.joinedAt,
+    };
+    if (payload.displayName !== undefined) self.displayName = payload.displayName;
+    this.#self = Object.freeze(self);
+    this.#role = payload.role;
+    this.#reconnectOutcome = "recovered";
+    const open = this.#reconnectOpen;
+    this.#reconnectOpen = undefined;
+    this.#setState("joined");
+    open?.resolve();
+    // Listeners on state_changed / later roster events may leave(); never resume a closed engine.
+    if (!this.#is("joined")) {
+      this.#preRecoveryParticipants = undefined;
+      return;
+    }
+    this.#emitRecoveryRosterDiff();
+    if (!this.#is("joined")) return;
+    const expiresAt = payload.iceServersExpireAt !== undefined ? Date.parse(payload.iceServersExpireAt) : NaN;
+    this.#startDelivery(payload.mediaMode, payload.iceServers ?? [], Number.isFinite(expiresAt) ? expiresAt : null);
+  }
+
+  /** Announce peers who joined or left during the outage; leave survivors quiet (no join/leave flash). */
+  #emitRecoveryRosterDiff(): void {
+    const previous = this.#preRecoveryParticipants ?? [];
+    this.#preRecoveryParticipants = undefined;
+    const previousIds = new Set(previous.map((participant) => participant.id));
+    const next = this.#roster.list();
+    const nextIds = new Set(next.map((participant) => participant.id));
+    for (const id of previousIds) {
+      if (!nextIds.has(id)) this.#emit("participant_left", { participantId: id, reason: "disconnected" });
+    }
+    for (const participant of next) {
+      if (!previousIds.has(participant.id)) this.#emit("participant_joined", { participant });
+    }
+  }
+
+  #failReconnectOpen(error: MeetingError, retry = false): void {
+    const open = this.#reconnectOpen;
+    if (!open) return;
+    this.#reconnectOpen = undefined;
+    this.#reconnectOutcome = retry ? "retry" : "failed";
+    if (!retry) this.#log.warn("reconnect open failed", { code: error.code });
+    open.resolve();
+  }
+
+  #onReconnectAbandoned(reason: ReconnectReasonClass): void {
+    if (this.#state === "closed") return;
+    const actual = this.#pendingAbandonReason ?? reason;
+    this.#pendingAbandonReason = undefined;
+    this.#preRecoveryParticipants = undefined;
+    this.#reconnect = undefined;
+    if (actual === "meeting_ended") {
+      this.#finish("meeting_ended");
+      return;
+    }
+    if (actual === "session_replaced") {
+      this.#finish("session_replaced", new MeetingError("session_replaced"));
+      return;
+    }
+    if (actual === "left") {
+      this.#finish("left");
+      return;
+    }
+    const error =
+      actual === "token_refresh_failed"
+        ? new MeetingError("join_token_expired")
+        : new MeetingError("connection_lost");
+    this.#finish("connection_lost", error);
+  }
+
+  #cancelReconnect(reason: ReconnectReasonClass): void {
+    const controller = this.#reconnect;
+    this.#reconnect = undefined;
+    this.#preRecoveryParticipants = undefined;
+    if (this.#reconnectOpen) {
+      this.#reconnectOutcome = "cancelled";
+      const open = this.#reconnectOpen;
+      this.#reconnectOpen = undefined;
+      open.resolve();
+    }
+    controller?.cancel(reason);
+  }
+
+  #installVisibilityListener(): void {
+    const doc = (globalThis as { document?: { visibilityState?: string; addEventListener?: typeof document.addEventListener } })
+      .document;
+    if (!doc || typeof doc.addEventListener !== "function") return;
+    this.#onVisibility = () => {
+      if (doc.visibilityState !== "visible" || this.#disposed) return;
+      if (this.#state === "reconnecting") {
+        // Continue or restart the recovery chain with a visibility trigger.
+        if (this.#reconnect && !this.#reconnect.active) this.#reconnect.start("visibility");
+        return;
+      }
+      if (this.#state === "joined" && this.#session === undefined) {
+        this.#beginRecovery("visibility");
+      }
+    };
+    doc.addEventListener("visibilitychange", this.#onVisibility);
+  }
+
+  #removeVisibilityListener(): void {
+    const doc = (globalThis as { document?: { removeEventListener?: typeof document.removeEventListener } }).document;
+    const handler = this.#onVisibility;
+    this.#onVisibility = undefined;
+    if (doc && handler && typeof doc.removeEventListener === "function") {
+      doc.removeEventListener("visibilitychange", handler);
+    }
   }
 
   #clearEndMeetingTimer(): void {

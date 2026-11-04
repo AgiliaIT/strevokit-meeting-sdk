@@ -17,6 +17,10 @@ const ALLOWED_KEYS = new Set([
   "path",
   "localPath",
   "remotePath",
+  "trigger",
+  "elapsedMs",
+  "requestId",
+  "correlationId",
 ]);
 
 const JWT_SHAPE = /[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/;

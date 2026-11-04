@@ -29,10 +29,11 @@ describe("peer media › failures and recovery", () => {
     lowPc: FakePeerConnection;
   };
 
-  async function pair(options: { devices?: boolean } = {}): Promise<Joined> {
+  async function pair(options: { devices?: boolean; reconnectWindowMs?: number } = {}): Promise<Joined> {
     const { low: lowId, high: highId } = orderedIds();
-    const low = h.createEngine({ participantId: lowId });
-    const high = h.createEngine({ participantId: highId });
+    const engineOptions = options.reconnectWindowMs === undefined ? {} : { reconnectWindowMs: options.reconnectWindowMs };
+    const low = h.createEngine({ participantId: lowId, ...engineOptions });
+    const high = h.createEngine({ participantId: highId, ...engineOptions });
     const lowEvents = recordEvents(low, { media: true });
     const highEvents = recordEvents(high, { media: true });
     await low.join();
@@ -83,10 +84,19 @@ describe("peer media › failures and recovery", () => {
     expect(low.participants.map((p) => p.id)).toEqual([highId]);
   });
 
-  it("a connection that fails after connecting reports connection_failed", async () => {
+  it("a connection that fails after connecting is replaced once, then reports connection_failed", async () => {
     const { low, lowId, highId, lowEvents, lowPc } = await pair({ devices: true });
     expect(low.remoteMedia(highId).camera).not.toBeNull();
+    // The replacement never connects, so its failure is final.
+    h.network.autoConnect = false;
     lowPc.setConnectionState("failed");
+    await settle();
+    // First failure recreates the link within the recovery window.
+    expect(low.mediaConnectionStatus(highId)).toBe("interrupted");
+    expect(failures()).not.toContainEqual([lowId, highId, "connection_failed"]);
+    const replacement = h.network.open().find((pc) => pc !== lowPc && !pc.closed);
+    expect(replacement).toBeDefined();
+    replacement!.setConnectionState("failed");
     await settle();
     expect(failures()).toContainEqual([lowId, highId, "connection_failed"]);
     expect(low.mediaConnectionStatus(highId)).toBe("failed");
@@ -115,18 +125,119 @@ describe("peer media › failures and recovery", () => {
     expect(errorCodes(highEvents)).toEqual(["media_connection_failed"]);
   });
 
-  it("does not retry after a failure", async () => {
+  it("replaces a failed link once and does not keep retrying", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { low, lowId, highId, lowPc } = await pair();
+    h.network.autoConnect = false;
     lowPc.setConnectionState("failed");
     await settle();
+    expect(low.mediaConnectionStatus(highId)).toBe("interrupted");
+    const replacement = h.network.open().find((pc) => pc !== lowPc && !pc.closed);
+    expect(replacement).toBeDefined();
+    replacement!.setConnectionState("failed");
+    await settle();
+    expect(low.mediaConnectionStatus(highId)).toBe("failed");
     const connections = h.network.connections.length;
     const offers = offersFrom(lowId);
     await vi.advanceTimersByTimeAsync(120_000);
     await settle();
     expect(h.network.connections).toHaveLength(connections);
     expect(offersFrom(lowId)).toBe(offers);
+  });
+
+  it("replaces a failed link quietly: same room session, no failure report, media returns", async () => {
+    const { low, high, highId, lowEvents, lowPc } = await pair({ devices: true });
+    const sockets = h.realtime.sockets.length;
+    lowPc.setConnectionState("failed");
+    await settle();
+
+    expect(lowPc.closed).toBe(true);
+    expect(failures()).toEqual([]);
+    expect(errorCodes(lowEvents)).toEqual([]);
+    expect(statuses(lowEvents, highId)).toEqual(["connecting", "connected", "interrupted", "connected"]);
+    expect(low.mediaConnectionStatus(highId)).toBe("connected");
+    expect(low.remoteMedia(highId).camera).not.toBeNull();
+    expect(h.network.open()).toHaveLength(2);
+    expect(low.state).toBe("joined");
+    expect(high.state).toBe("joined");
+    expect(h.realtime.sockets).toHaveLength(sockets);
+    expect(low.participants.map((p) => p.id)).toEqual([highId]);
+  });
+
+  it("replaces the answerer's failed link as well", async () => {
+    const { low, high, lowId, highId, lowPc } = await pair({ devices: true });
+    const highPc = h.network.connections.find((pc) => pc !== lowPc);
+    if (!highPc) throw new Error("no answerer connection");
+    highPc.setConnectionState("failed");
+    await settle();
+    expect(highPc.closed).toBe(true);
+    expect(failures()).toEqual([]);
+    expect(h.network.open()).toHaveLength(2);
+    expect(high.mediaConnectionStatus(lowId)).toBe("interrupted");
+    expect(low.mediaConnectionStatus(highId)).toBe("connected");
+  });
+
+  it("reports a replacement that never connects once, and does not replace it again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { low, lowId, highId, lowEvents, lowPc } = await pair({ devices: true });
+    h.network.autoConnect = false;
+    const sockets = h.realtime.sockets.length;
+    lowPc.setConnectionState("failed");
+    await settle();
+    expect(low.mediaConnectionStatus(highId)).toBe("interrupted");
+    expect(failures()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await settle();
+    expect(failures()).toContainEqual([lowId, highId, "connection_timeout"]);
     expect(low.mediaConnectionStatus(highId)).toBe("failed");
+    expect(errorCodes(lowEvents)).toEqual(["media_connection_failed"]);
+    expect(low.state).toBe("joined");
+    expect(h.realtime.sockets).toHaveLength(sockets);
+
+    const connections = h.network.connections.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    await settle();
+    expect(h.network.connections).toHaveLength(connections);
+  });
+
+  it("does not replace a failed link once the recovery window has passed", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { low, lowId, highId, lowPc } = await pair({ reconnectWindowMs: 10_000 });
+    lowPc.setConnectionState("disconnected");
+    await settle();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const connections = h.network.connections.length;
+    lowPc.setConnectionState("failed");
+    await settle();
+    expect(h.network.connections).toHaveLength(connections);
+    expect(failures()).toContainEqual([lowId, highId, "connection_failed"]);
+    expect(low.mediaConnectionStatus(highId)).toBe("failed");
+    expect(low.state).toBe("joined");
+  });
+
+  it("logs the replacement with the media trigger", async () => {
+    const entries: { message: string; fields: Record<string, string | number | boolean> | undefined }[] = [];
+    const logger = {
+      info: (message: string, fields?: Record<string, string | number | boolean>) => entries.push({ message, fields }),
+      warn: (message: string, fields?: Record<string, string | number | boolean>) => entries.push({ message, fields }),
+    };
+    const { low: lowId, high: highId } = orderedIds();
+    const low = h.createEngine({ participantId: lowId, logger });
+    const high = h.createEngine({ participantId: highId });
+    await low.join();
+    await high.join();
+    await settle();
+    const lowPc = h.network.connections[0];
+    if (!lowPc) throw new Error("no connection");
+    lowPc.setConnectionState("failed");
+    await settle();
+    const lifecycle = entries.filter((e) => e.message.startsWith("reconnect "));
+    expect(lifecycle.map((e) => [e.message, e.fields?.trigger, e.fields?.attempt])).toEqual([
+      ["reconnect attempt started", "media", 1],
+      ["reconnect succeeded", "media", 1],
+    ]);
+    expect(JSON.stringify(lifecycle)).not.toMatch(/sdp|candidate|token/i);
   });
 
   it("never exposes raw exception text in events or errors", async () => {

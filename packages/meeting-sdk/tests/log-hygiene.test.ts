@@ -88,7 +88,13 @@ describe("log hygiene", () => {
     await low.enableCamera();
     await settle();
 
-    h.network.open()[0]?.setConnectionState("failed");
+    const first = h.network.open()[0];
+    h.network.autoConnect = false;
+    first?.setConnectionState("failed");
+    await settle();
+    // First failure recreates the link; a second failure ends media recovery.
+    const recreated = h.network.open().find((pc) => pc !== first && !pc.closed);
+    recreated?.setConnectionState("failed");
     await settle();
     expect(h.realtime.peerReports.some((r) => r.type === "webrtc.failed")).toBe(true);
 

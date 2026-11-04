@@ -17,6 +17,8 @@ export const SWITCH_DEADLINE_MARGIN_MS = 5_000;
 export const SWITCH_POLL_MS = 1_000;
 /** How long a drop during a switch is held back before it is reported as an interruption. */
 export const SWITCH_INTERRUPTION_HOLD_MS = 5_000;
+/** How long an interruption must last before an offerer restarts the connection; shorter drops often heal alone. */
+export const INTERRUPTION_RESTART_HOLD_MS = 3_000;
 /** Times after each path report at which the path is read again; after the last, every `PATH_RECHECK_INTERVAL_MS`. */
 export const PATH_RECHECK_DELAYS_MS: readonly number[] = [2_000, 10_000];
 export const PATH_RECHECK_INTERVAL_MS = 30_000;
@@ -26,7 +28,9 @@ export type LinkStatus = "connecting" | "connected" | "interrupted" | "failed";
 export type LinkFailure = "connection_failed" | "connection_timeout" | "negotiation_failed";
 export type LocalKind = "camera" | "microphone" | "screen";
 export type SwitchOutcome = "completed" | "failed";
-export type RestartReason = "refresh" | "peer_request";
+export type RestartReason = "refresh" | "peer_request" | "interruption" | "network";
+/** What started an attempt to restore media that dropped while the meeting connection stayed up. */
+export type RecoveryTrigger = "media" | "network";
 export interface PeerLinkCallbacks {
   sendOffer(payload: PayloadMap["webrtc.offer"]): void;
   sendAnswer(payload: PayloadMap["webrtc.answer"]): void;
@@ -42,6 +46,8 @@ export interface PeerLinkCallbacks {
   requestRestart(): boolean;
   /** The outcome of one switch attempt. */
   switchResult(outcome: SwitchOutcome): void;
+  /** An offerer started a restart because the connection was interrupted. */
+  recoveryStarted(trigger: RecoveryTrigger): void;
 }
 
 /** A planned move to fresh candidates before the credentials in use expire. */
@@ -121,6 +127,10 @@ export class PeerLink {
   #switch: SwitchState | null = null;
   #restarting = false;
   #interruptionHold: TimerHandle | undefined;
+  #restartHold: TimerHandle | undefined;
+  /** Local candidates gathered while an offer is being created; sent after it so the other side sees it first. */
+  #heldLocal: IceCandidate[] | null = null;
+  #remoteOrigin: string | undefined;
   #lastReport: PathReport | null = null;
   #recheckTimer: TimerHandle | undefined;
 
@@ -176,10 +186,10 @@ export class PeerLink {
       this.#bindStreams();
       await this.#attachAll();
       const offer = await this.#pc.createOffer();
+      this.#heldLocal = [];
       await this.#pc.setLocalDescription(offer);
       if (this.#closed) return;
-      const sdp = this.#pc.localDescription?.sdp ?? offer.sdp ?? "";
-      this.#callbacks.sendOffer({ targetParticipantId: this.peerId, sdp });
+      this.#sendOffer(this.#pc.localDescription?.sdp ?? offer.sdp ?? "");
     });
   }
 
@@ -197,6 +207,7 @@ export class PeerLink {
       return;
     }
     this.#offerHandled = true;
+    this.#remoteOrigin = sessionOrigin(sdp);
     this.#run(async () => {
       await this.#pc.setRemoteDescription({ type: "offer", sdp });
       this.#remoteDescriptionSet = true;
@@ -217,6 +228,15 @@ export class PeerLink {
       this.#callbacks.sendAnswer({ targetParticipantId: this.peerId, sdp: answerSdp });
       await this.#flushCandidates();
     });
+  }
+
+  /**
+   * Answerer: whether `sdp` comes from a different connection than the one this link answered first, as when the
+   * other side replaced its connection. Such an offer needs a fresh link; a restart keeps the same origin.
+   */
+  startsNewSession(sdp: string): boolean {
+    const origin = sessionOrigin(sdp);
+    return this.#offerHandled && this.#remoteOrigin !== undefined && origin !== undefined && origin !== this.#remoteOrigin;
   }
 
   /** Offerer: applies the answer while an offer is outstanding; otherwise ignored. */
@@ -241,9 +261,11 @@ export class PeerLink {
         await this.#pc.setRemoteDescription({ type: "answer", sdp });
       } catch {
         this.#restartFailed();
+        this.#rescheduleInterruptionRestartIfNeeded();
         return;
       }
       await this.#flushCandidates();
+      this.#rescheduleInterruptionRestartIfNeeded();
     });
   }
 
@@ -288,23 +310,34 @@ export class PeerLink {
    * Offerer: renegotiates with fresh candidates. Joins a restart whose answer is still outstanding instead of starting
    * another; a restart that already finished may predate the other side's fresh servers, so it does not count.
    */
-  restart(reason: RestartReason): void {
-    if (this.role !== "offerer" || this.#closed || this.#restarting) return;
+  restart(reason: RestartReason): boolean {
+    if (this.role !== "offerer" || this.#closed || this.#restarting) return false;
     this.#restarting = true;
     this.#log.debug("media connection restart", { participantId: this.peerId, reason });
     this.#chain = this.#chain.then(async () => {
       if (this.#closed) return;
       try {
         const offer = await this.#pc.createOffer({ iceRestart: true });
+        this.#heldLocal = [];
         await this.#pc.setLocalDescription(offer);
         if (this.#closed) return;
-        const sdp = this.#pc.localDescription?.sdp ?? offer.sdp ?? "";
-        this.#callbacks.sendOffer({ targetParticipantId: this.peerId, sdp });
+        this.#sendOffer(this.#pc.localDescription?.sdp ?? offer.sdp ?? "");
       } catch {
+        this.#heldLocal = null;
         this.#restarting = false;
         this.#restartFailed();
+        this.#rescheduleInterruptionRestartIfNeeded();
       }
     });
+    return true;
+  }
+
+  /** The browser regained connectivity or changed networks: an offerer restarts an interrupted connection now. */
+  networkChanged(): void {
+    if (this.#closed || this.#status !== "interrupted" || this.role !== "offerer") return;
+    this.#clearRestartHold();
+    if (this.restart("network")) this.#callbacks.recoveryStarted("network");
+    else this.#scheduleInterruptionRestart();
   }
 
   addRemoteCandidate(candidate: IceCandidate): void {
@@ -345,6 +378,7 @@ export class PeerLink {
     this.#clearTimer();
     this.#endSwitch();
     this.#clearInterruptionHold();
+    this.#clearRestartHold();
     this.#clearRecheck();
     this.#pc.onicecandidate = null;
     this.#pc.onconnectionstatechange = null;
@@ -448,6 +482,7 @@ export class PeerLink {
     if (this.#switch !== current || this.#closed) return;
     this.#clearSwitchTimers(current);
     this.#restarting = false;
+    this.#rescheduleInterruptionRestartIfNeeded();
     this.#log.debug("media path switch attempt failed", { participantId: this.peerId, attempt: current.attempt });
     this.#callbacks.switchResult("failed");
     if (this.#switch !== current || this.#closed) return;
@@ -484,6 +519,28 @@ export class PeerLink {
     this.#interruptionHold = undefined;
   }
 
+  #clearRestartHold(): void {
+    if (this.#restartHold !== undefined) this.#env.clearTimeout(this.#restartHold);
+    this.#restartHold = undefined;
+  }
+
+  /** When a concurrent restart ends and the link is still interrupted, arm another recovery. */
+  #rescheduleInterruptionRestartIfNeeded(): void {
+    if (this.#closed || this.#status !== "interrupted") return;
+    this.#scheduleInterruptionRestart();
+  }
+
+  /** Offerer: restarts the connection when an interruption outlasts the hold, without waiting for it to fail. */
+  #scheduleInterruptionRestart(): void {
+    if (this.role !== "offerer" || this.#restartHold !== undefined) return;
+    this.#restartHold = this.#env.setTimeout(() => {
+      this.#restartHold = undefined;
+      if (this.#closed || this.#status !== "interrupted" || coarseState(this.#pc) === "connected") return;
+      if (this.restart("interruption")) this.#callbacks.recoveryStarted("media");
+      else this.#scheduleInterruptionRestart();
+    }, INTERRUPTION_RESTART_HOLD_MS);
+  }
+
   #bindStreams(): void {
     const Stream = this.#env.MediaStream;
     if (!Stream) return;
@@ -516,6 +573,14 @@ export class PeerLink {
     }
   }
 
+  /** Sends the offer, then the candidates gathered while it was being created. */
+  #sendOffer(sdp: string): void {
+    this.#callbacks.sendOffer({ targetParticipantId: this.peerId, sdp });
+    const held = this.#heldLocal;
+    this.#heldLocal = null;
+    for (const candidate of held ?? []) this.#callbacks.sendCandidate({ targetParticipantId: this.peerId, candidate });
+  }
+
   #onLocalCandidate(candidate: IceCandidateLike | null): void {
     if (this.#closed || !candidate || candidate.candidate === "") return;
     const payload: IceCandidate = {
@@ -524,7 +589,8 @@ export class PeerLink {
       sdpMLineIndex: candidate.sdpMLineIndex ?? null,
     };
     if (typeof candidate.usernameFragment === "string") payload.usernameFragment = candidate.usernameFragment;
-    this.#callbacks.sendCandidate({ targetParticipantId: this.peerId, candidate: payload });
+    if (this.#heldLocal) this.#heldLocal.push(payload);
+    else this.#callbacks.sendCandidate({ targetParticipantId: this.peerId, candidate: payload });
   }
 
   #onStateChange(): void {
@@ -562,6 +628,8 @@ export class PeerLink {
   #setStatus(status: LinkStatus, reason?: LinkFailure): boolean {
     if (this.#status === status) return false;
     this.#status = status;
+    if (status === "interrupted") this.#scheduleInterruptionRestart();
+    else this.#clearRestartHold();
     this.#callbacks.statusChanged(status, reason);
     return true;
   }
@@ -623,4 +691,12 @@ export class PeerLink {
     if (this.#timer !== undefined) this.#env.clearTimeout(this.#timer);
     this.#timer = undefined;
   }
+}
+
+/** The connection identifier on the origin line of a session description; it stays the same across restarts. */
+function sessionOrigin(sdp: string): string | undefined {
+  for (const line of sdp.split(/\r?\n/)) {
+    if (line.startsWith("o=")) return line.split(" ")[1];
+  }
+  return undefined;
 }

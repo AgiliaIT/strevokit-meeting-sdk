@@ -280,9 +280,9 @@ export class FakeRealtime {
   }
 
   /** Close a connection from the server with `code` (default: the most recent connection). */
-  closeWith(code: number, participantId?: string): void {
+  closeWith(code: number, participantId?: string, reason?: string): void {
     const socket = this.socketFor(participantId);
-    this.enqueue(() => this.#serverClose(socket, code));
+    this.enqueue(() => this.#serverClose(socket, code, reason));
   }
 
   /** Deliver a raw frame to a connection (default: the most recent connection). */

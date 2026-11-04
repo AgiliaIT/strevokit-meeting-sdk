@@ -95,6 +95,32 @@ export interface EngineEnvironment {
   setTimeout(callback: () => void, ms: number): TimerHandle;
   clearTimeout(handle: TimerHandle): void;
   now(): number;
+  /**
+   * Subscribes to the browser regaining connectivity or switching networks. Returns the unsubscribe function.
+   * Absent where the platform offers no such signal.
+   */
+  onNetworkChange?(callback: () => void): () => void;
+}
+
+type EventTargetLike = {
+  addEventListener(type: string, listener: () => void): void;
+  removeEventListener(type: string, listener: () => void): void;
+};
+
+function subscribeNetworkChange(callback: () => void): () => void {
+  const scope = globalThis as { addEventListener?: unknown; navigator?: { connection?: unknown } };
+  const targets: { target: EventTargetLike; type: string }[] = [];
+  if (typeof scope.addEventListener === "function") {
+    targets.push({ target: globalThis as unknown as EventTargetLike, type: "online" });
+  }
+  const connection = scope.navigator?.connection as Partial<EventTargetLike> | undefined;
+  if (connection && typeof connection.addEventListener === "function" && typeof connection.removeEventListener === "function") {
+    targets.push({ target: connection as EventTargetLike, type: "change" });
+  }
+  for (const { target, type } of targets) target.addEventListener(type, callback);
+  return () => {
+    for (const { target, type } of targets) target.removeEventListener(type, callback);
+  };
 }
 
 let override: EngineEnvironment | undefined;
@@ -115,6 +141,7 @@ export function defaultEnvironment(): EngineEnvironment {
     setTimeout: (callback, ms) => globalThis.setTimeout(callback, ms),
     clearTimeout: (handle) => globalThis.clearTimeout(handle as ReturnType<typeof globalThis.setTimeout>),
     now: () => Date.now(),
+    onNetworkChange: subscribeNetworkChange,
   };
 }
 

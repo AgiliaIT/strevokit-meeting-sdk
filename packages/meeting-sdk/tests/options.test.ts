@@ -96,4 +96,24 @@ describe("createMeetingEngine options", () => {
   it("throws TypeError when options are missing", () => {
     expect(codeOf(() => createMeetingEngine(undefined as unknown as MeetingEngineOptions))).toBe("TypeError");
   });
+
+  it("accepts optional getJoinToken and reconnectWindowMs, and remains valid when omitted", () => {
+    expect(codeOf(() => createMeetingEngine(options()))).toBe("ok");
+    expect(
+      codeOf(() =>
+        createMeetingEngine(
+          options({
+            getJoinToken: async () => realtime.tokenFor(testUlid()),
+            reconnectWindowMs: 5_000,
+          }),
+        ),
+      ),
+    ).toBe("ok");
+  });
+
+  it("rejects a non-function getJoinToken", () => {
+    expect(
+      codeOf(() => createMeetingEngine(options({ getJoinToken: "nope" as unknown as () => Promise<string> }))),
+    ).toBe("TypeError");
+  });
 });

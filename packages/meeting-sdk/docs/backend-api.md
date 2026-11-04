@@ -192,6 +192,11 @@ Idempotency-Key: <optional opaque string>
 role, and does not consume an extra capacity slot. A **new** identity is rejected with `422`
 `participant_limit_exceeded` when the meeting already has `max_participants` distinct people.
 
+**Display names:** Pass the name users should see in the roster as `display_name` when you authorize. The join-token
+route and the browser (including this SDK) do not accept a name. If no usable name is available at join, the UI shows
+**Guest**. To rename someone, re-authorize with the same `external_user_id` and a new `display_name`, then mint a new
+join token and have them join again.
+
 Optional `Idempotency-Key` behaves like create (same key + different body → `409` `idempotency_conflict`).
 
 **Success:** `201` on first insert, `200` on upsert of an existing identity (idempotent replay returns the stored
@@ -241,7 +246,8 @@ Content-Type: application/json
 |-------|----------|--------|
 | `participant_public_id` | yes | From authorize; must belong to this meeting |
 
-Do not send `role`, `tenant_id`, or numeric `id`. Role comes from the authorized participant row.
+Do not send `role`, `display_name`, `tenant_id`, or numeric `id`. Role and display name come from the authorized
+participant row.
 
 **Success:** `201 Created`
 

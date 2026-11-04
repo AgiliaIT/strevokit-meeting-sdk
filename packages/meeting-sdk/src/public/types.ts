@@ -13,6 +13,17 @@ export interface MeetingEngineOptions {
   joinTimeoutMs?: number;
   /** Optional diagnostics sink. The SDK never passes the join token or raw exception text to it. */
   logger?: MeetingLogger;
+  /**
+   * Optional. Called when a new meeting-service connection needs a join token and the in-memory token
+   * cannot be used. Must resolve to a server-issued join token for the same participant. Reject to fail
+   * recovery. The returned token is kept in memory only and never logged.
+   */
+  getJoinToken?: () => Promise<string>;
+  /**
+   * Optional. Continuous unsuccessful recovery budget in milliseconds. Default 120000.
+   * Values outside 1000–600000 are clamped to that range.
+   */
+  reconnectWindowMs?: number;
 }
 
 /** Optional diagnostics sink. Every method is optional. */
@@ -23,9 +34,22 @@ export interface MeetingLogger {
   error?(message: string, fields?: Readonly<Record<string, string | number | boolean>>): void;
 }
 
-/** Engine lifecycle state. `closed` is terminal: create a new engine to join again. */
-export type ConnectionState = "idle" | "connecting" | "joining" | "joined" | "leaving" | "closed";
-
+/**
+ * Engine lifecycle state. `closed` is terminal: create a new engine to join again.
+ *
+ * After a recoverable meeting-service interruption while `joined`, the engine moves to `reconnecting`
+ * and attempts automatic recovery. Success returns to `joined` (same self identity; `joined` is not
+ * re-emitted). Exhaustion or hard failure moves to `closed` with `connection_lost`. Deliberate leave,
+ * meeting ended, and session replaced cancel recovery and close accordingly.
+ */
+export type ConnectionState =
+  | "idle"
+  | "connecting"
+  | "joining"
+  | "joined"
+  | "reconnecting"
+  | "leaving"
+  | "closed";
 /** Role assigned by the platform when the join token was issued. */
 export type ParticipantRole = "host" | "participant";
 

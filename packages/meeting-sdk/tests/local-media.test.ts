@@ -385,11 +385,16 @@ describe("release", () => {
     expect(h.media.liveTracks()).toBe(0);
   });
 
-  it("stops every track when the connection is lost", async () => {
-    const engine = await joinedHost();
+  it("keeps local tracks while reconnecting and stops them when recovery is abandoned", async () => {
+    const engine = h.createEngine({ role: "host", reconnectWindowMs: 1_000 });
+    await engine.join();
     await engine.enableCamera();
+    h.realtime.holdWelcome = true;
     h.realtime.dropWithoutClose();
     await flush();
+    expect(engine.state).toBe("reconnecting");
+    expect(h.media.liveTracks("camera")).toBe(1);
+    await engine.leave();
     expect(engine.state).toBe("closed");
     expect(h.media.liveTracks()).toBe(0);
   });

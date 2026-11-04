@@ -74,11 +74,20 @@ describe("peer media › status during a planned switch", () => {
     expect(reportsFrom(lowId)).toEqual(["webrtc.connected", "webrtc.disconnected"]);
   });
 
-  it("a failure during a switch is reported at once", async () => {
+  it("a failure during a switch is replaced once, then reported", async () => {
     const { lowId, highId, lowPc, events, mark } = await switching({ completes: false });
+    h.network.autoConnect = false;
     lowPc.setConnectionState("failed");
     await settle();
-    expect(eventsOfType(events.slice(mark), "media_connection_changed")).toEqual([{ participantId: highId, status: "failed" }]);
+    expect(eventsOfType(events.slice(mark), "media_connection_changed").map((e) => e.status)).toContain("interrupted");
+    const replacement = h.network.open().find((pc) => pc !== lowPc && !pc.closed);
+    expect(replacement).toBeDefined();
+    replacement!.setConnectionState("failed");
+    await settle();
+    expect(eventsOfType(events.slice(mark), "media_connection_changed").at(-1)).toEqual({
+      participantId: highId,
+      status: "failed",
+    });
     expect(reportsFrom(lowId)).toEqual(["webrtc.connected", "webrtc.failed"]);
   });
 

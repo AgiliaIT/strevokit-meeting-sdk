@@ -8,7 +8,7 @@
 export type CloseReason = "left" | "meeting_ended" | "session_replaced" | "connection_lost" | "join_failed" | "error";
 
 // @public
-export type ConnectionState = "idle" | "connecting" | "joining" | "joined" | "leaving" | "closed";
+export type ConnectionState = "idle" | "connecting" | "joining" | "joined" | "reconnecting" | "leaving" | "closed";
 
 // @public
 export function createMeetingEngine(options: MeetingEngineOptions): MeetingEngine;
@@ -68,9 +68,11 @@ export interface MeetingEngine {
 
 // @public
 export interface MeetingEngineOptions {
+    getJoinToken?: () => Promise<string>;
     joinTimeoutMs?: number;
     logger?: MeetingLogger;
     realtimeUrl: string;
+    reconnectWindowMs?: number;
     token: string;
 }
 

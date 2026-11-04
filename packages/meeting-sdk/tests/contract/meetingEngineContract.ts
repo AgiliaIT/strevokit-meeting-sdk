@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MeetingError } from "../../src/public/errors.js";
 import type { MeetingEngine } from "../../src/public/types.js";
-import { flush, testUlid } from "../support/fakeRealtime.js";
+import { FakeWebSocket, flush, testUlid } from "../support/fakeRealtime.js";
 import { type EngineHarness, eventsOfType, recordEvents } from "../support/harness.js";
 
 async function rejection(promise: Promise<unknown>): Promise<MeetingError> {
@@ -154,16 +154,208 @@ export function describeMeetingEngineContract(name: string, makeHarness: () => E
         expect(eventsOfType(events, "closed")).toEqual([{ reason: "meeting_ended" }]);
       });
 
-      it("closes with connection_lost after an unexpected drop, exactly once", async () => {
+      it("enters reconnecting after an unexpected drop and recovers as the same participant", async () => {
+        const selfId = testUlid();
+        const engine = h.createEngine({ participantId: selfId });
+        await engine.join();
+        const events = recordEvents(engine);
+        expect(engine.self?.id).toBe(selfId);
+        h.realtime.holdWelcome = true;
+        h.realtime.dropWithoutClose(selfId);
+        await flush();
+        expect(engine.state).toBe("reconnecting");
+        expect(eventsOfType(events, "closed")).toEqual([]);
+        h.realtime.releaseWelcome();
+        await flush();
+        expect(engine.state).toBe("joined");
+        expect(engine.self?.id).toBe(selfId);
+        expect(eventsOfType(events, "joined")).toEqual([]);
+        expect(eventsOfType(events, "state_changed").map((e) => e.state)).toEqual(["reconnecting", "joined"]);
+      });
+
+      it("enters reconnecting after post-join close 1001 (drain_timeout wire) and recovers as the same participant", async () => {
+        const selfId = testUlid();
+        const engine = h.createEngine({ participantId: selfId });
+        await engine.join();
+        const events = recordEvents(engine);
+        expect(engine.self?.id).toBe(selfId);
+        h.realtime.holdWelcome = true;
+        h.realtime.closeWith(1001, selfId, "drain_timeout");
+        await flush();
+        expect(engine.state).toBe("reconnecting");
+        expect(eventsOfType(events, "closed")).toEqual([]);
+        const serialized = JSON.stringify(events);
+        expect(serialized.toLowerCase()).not.toContain("drain");
+        expect(serialized.toLowerCase()).not.toContain("drain_timeout");
+        h.realtime.releaseWelcome();
+        await flush();
+        expect(engine.state).toBe("joined");
+        expect(engine.self?.id).toBe(selfId);
+        expect(eventsOfType(events, "joined")).toEqual([]);
+        expect(eventsOfType(events, "state_changed").map((e) => e.state)).toEqual(["reconnecting", "joined"]);
+      });
+
+      it("cancels recovery on leave() during reconnecting and closes with left", async () => {
         const engine = await joined();
         const events = recordEvents(engine);
+        h.realtime.nextHandshake({ kind: "never_open" });
         h.realtime.dropWithoutClose();
         await flush();
+        expect(engine.state).toBe("reconnecting");
         await engine.leave();
+        expect(engine.state).toBe("closed");
+        expect(eventsOfType(events, "closed")).toEqual([{ reason: "left" }]);
+      });
+
+      it("closes with connection_lost when the recovery window is exhausted", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        const engine = h.createEngine({ reconnectWindowMs: 1_000 });
+        await engine.join();
+        const events = recordEvents(engine);
+        for (let i = 0; i < 30; i += 1) h.realtime.nextHandshake({ kind: "close", code: 1006 });
+        h.realtime.dropWithoutClose();
+        await flush();
+        expect(engine.state).toBe("reconnecting");
+        for (let i = 0; i < 40; i += 1) {
+          await vi.advanceTimersByTimeAsync(500);
+          await flush();
+          if (engine.state === "closed") break;
+        }
+        expect(engine.state).toBe("closed");
         const closed = eventsOfType(events, "closed");
         expect(closed).toHaveLength(1);
         expect(closed[0]?.reason).toBe("connection_lost");
         expect(closed[0]?.error?.code).toBe("connection_lost");
+      });
+
+      it("does not duplicate self on the roster after recovery", async () => {
+        const selfId = testUlid();
+        const otherId = testUlid();
+        h.realtime.addPresent({ participantId: otherId, displayName: "Ada" });
+        const engine = h.createEngine({ participantId: selfId, role: "host" });
+        await engine.join();
+        expect(engine.participants.map((p) => p.id)).toEqual([otherId]);
+        h.realtime.dropWithoutClose(selfId);
+        await flush();
+        await flush();
+        expect(engine.state).toBe("joined");
+        expect(engine.self?.id).toBe(selfId);
+        expect(engine.participants.map((p) => p.id)).toEqual([otherId]);
+        expect(engine.participants.filter((p) => p.id === selfId)).toHaveLength(0);
+      });
+
+      it("times out a hung reconnect open and retries until recovery", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        const engine = h.createEngine({ joinTimeoutMs: 1_000, reconnectWindowMs: 60_000 });
+        await engine.join();
+        const events = recordEvents(engine);
+        h.realtime.nextHandshake({ kind: "never_open" });
+        h.realtime.dropWithoutClose();
+        await flush();
+        expect(engine.state).toBe("reconnecting");
+        await vi.advanceTimersByTimeAsync(1_000);
+        await flush();
+        expect(engine.state).toBe("reconnecting");
+        for (let i = 0; i < 20; i += 1) {
+          await vi.advanceTimersByTimeAsync(500);
+          await flush();
+          if (engine.state === "joined") break;
+        }
+        expect(engine.state).toBe("joined");
+        expect(eventsOfType(events, "closed")).toEqual([]);
+      });
+
+      it("abandons recovery when a reconnect join is rejected as non-retryable", async () => {
+        const selfId = testUlid();
+        const engine = h.createEngine({ participantId: selfId, joinTimeoutMs: 5_000 });
+        await engine.join();
+        const events = recordEvents(engine);
+        h.realtime.holdWelcome = true;
+        h.realtime.dropWithoutClose(selfId);
+        await flush();
+        expect(engine.state).toBe("reconnecting");
+        const rejectedSocket = h.realtime.socketFor(selfId);
+        expect(rejectedSocket.readyState).toBe(FakeWebSocket.OPEN);
+        h.realtime.sendMessage("session.rejected", { code: "brand_new_code" }, selfId);
+        await flush();
+        expect(engine.state).toBe("closed");
+        expect(rejectedSocket.readyState).toBe(FakeWebSocket.CLOSED);
+        const closed = eventsOfType(events, "closed");
+        expect(closed).toHaveLength(1);
+        expect(closed[0]?.reason).toBe("connection_lost");
+        expect(closed[0]?.error?.code).toBe("connection_lost");
+      });
+
+      it("emits roster diffs for peers who joined or left during recovery", async () => {
+        const selfId = testUlid();
+        const leavingId = testUlid();
+        const joiningId = testUlid();
+        h.realtime.addPresent({ participantId: leavingId, displayName: "Ada", role: "participant" });
+        const engine = h.createEngine({ participantId: selfId, role: "host" });
+        await engine.join();
+        const events = recordEvents(engine);
+        h.realtime.holdWelcome = true;
+        h.realtime.dropWithoutClose(selfId);
+        await flush();
+        expect(engine.state).toBe("reconnecting");
+        h.realtime.virtualLeave(leavingId);
+        h.realtime.addPresent({ participantId: joiningId, displayName: "Bob", role: "participant" });
+        h.realtime.releaseWelcome();
+        await flush();
+        expect(engine.state).toBe("joined");
+        expect(engine.participants.map((p) => p.id).sort()).toEqual([joiningId].sort());
+        expect(eventsOfType(events, "participant_left")).toEqual([
+          { participantId: leavingId, reason: "disconnected" },
+        ]);
+        const joined = eventsOfType(events, "participant_joined");
+        expect(joined).toHaveLength(1);
+        expect(joined[0]?.participant.id).toBe(joiningId);
+        expect(joined[0]?.participant.displayName).toBe("Bob");
+        expect(eventsOfType(events, "joined")).toEqual([]);
+      });
+
+      it("emits no roster churn when the peer set is unchanged after recovery", async () => {
+        const selfId = testUlid();
+        const otherId = testUlid();
+        h.realtime.addPresent({ participantId: otherId, displayName: "Ada" });
+        const engine = h.createEngine({ participantId: selfId, role: "host" });
+        await engine.join();
+        const events = recordEvents(engine);
+        h.realtime.holdWelcome = true;
+        h.realtime.dropWithoutClose(selfId);
+        await flush();
+        h.realtime.releaseWelcome();
+        await flush();
+        expect(engine.state).toBe("joined");
+        expect(eventsOfType(events, "participant_joined")).toEqual([]);
+        expect(eventsOfType(events, "participant_left")).toEqual([]);
+        expect(engine.participants.map((p) => p.id)).toEqual([otherId]);
+      });
+
+      it("does not re-enter joined when a recovery roster listener leaves", async () => {
+        const selfId = testUlid();
+        const leavingId = testUlid();
+        h.realtime.addPresent({ participantId: leavingId, displayName: "Ada" });
+        const engine = h.createEngine({ participantId: selfId, role: "host" });
+        await engine.join();
+        const events = recordEvents(engine);
+        engine.on("participant_left", () => {
+          void engine.leave();
+        });
+        h.realtime.holdWelcome = true;
+        h.realtime.dropWithoutClose(selfId);
+        await flush();
+        expect(engine.state).toBe("reconnecting");
+        h.realtime.virtualLeave(leavingId);
+        h.realtime.releaseWelcome();
+        await flush();
+        expect(engine.state).toBe("closed");
+        expect(eventsOfType(events, "closed")).toEqual([{ reason: "left" }]);
+        const states = eventsOfType(events, "state_changed").map((e) => e.state);
+        expect(states).toContain("joined");
+        expect(states.at(-1)).toBe("closed");
+        expect(states.indexOf("joined")).toBeLessThan(states.lastIndexOf("closed"));
+        expect(states.slice(states.lastIndexOf("closed") + 1)).toEqual([]);
       });
 
       it("falls back to closed(left) 5 s after leave() when the platform never closes", async () => {

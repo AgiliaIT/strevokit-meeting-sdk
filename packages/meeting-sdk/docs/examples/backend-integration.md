@@ -96,6 +96,8 @@ app.post("/api/meetings/:meetingId/join-token", requireSignedInUser, async (req,
 ## Notes
 
 - Create and authorize before the first join-token call; join-token needs an existing participant `public_id`.
+- Pass a real `display_name` on authorize; join-token cannot set or change it. If the UI shows **Guest**, authorize
+  used a missing or placeholder name, or that step was skipped.
 - Mint a new token for every join, including rejoining after `leave()` / `dispose()`.
 - Send the join-token response with `Cache-Control: no-store` so the token isn't cached.
 - Don't log the token or put it in a URL. The SDK keeps it in memory only.
