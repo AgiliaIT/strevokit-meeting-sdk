@@ -28,3 +28,12 @@ export const MAX_ICE_SERVER_URL_LENGTH = 256 as const;
 
 export const MAX_ICE_SERVER_USERNAME_LENGTH = 256 as const;
 export const MAX_ICE_SERVER_CREDENTIAL_LENGTH = 256 as const;
+
+/** Maximum length of `webrtc.quality_sample` codec / MIME token. */
+export const MAX_QUALITY_CODEC_LENGTH = 64 as const;
+
+/** Maximum length of ICE candidate-type tokens on quality samples. */
+export const MAX_QUALITY_CANDIDATE_TYPE_LENGTH = 32 as const;
+
+/** Upper bound for optional frame width/height on quality samples. */
+export const MAX_QUALITY_FRAME_DIMENSION = 16384 as const;

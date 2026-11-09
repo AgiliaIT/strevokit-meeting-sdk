@@ -148,6 +148,17 @@ export class FakeMediaDevices {
     return this.#capture("screen");
   };
 
+  enumerateDevices = async (): Promise<{ deviceId: string; kind: "videoinput" | "audioinput" }[]> => {
+    const listed: { deviceId: string; kind: "videoinput" | "audioinput" }[] = [];
+    for (const deviceId of this.devices.camera) {
+      if (deviceId) listed.push({ deviceId, kind: "videoinput" });
+    }
+    for (const deviceId of this.devices.microphone) {
+      if (deviceId) listed.push({ deviceId, kind: "audioinput" });
+    }
+    return listed;
+  };
+
   async #capture(kind: MediaKind, wanted?: string): Promise<MediaStream> {
     const gate = this.#gates.get(kind)?.shift();
     if (gate) await gate.promise;

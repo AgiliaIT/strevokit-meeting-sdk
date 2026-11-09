@@ -157,6 +157,22 @@ export class FakePeerConnection {
   statsUnavailable = false;
   /** Stats omit the transport report, so the selected pair must be found from the candidate pairs. */
   statsWithoutTransport = false;
+  /**
+   * Extra RTP/quality fields merged into `getStats()` when set. Used by quality-sample tests; omitted values
+   * leave those measures absent.
+   */
+  qualityStats: {
+    currentRoundTripTime?: number;
+    jitter?: number;
+    packetsLost?: number;
+    packetsReceived?: number;
+    bytesSent?: number;
+    bytesReceived?: number;
+    framesDropped?: number;
+    frameWidth?: number;
+    frameHeight?: number;
+    mimeType?: string;
+  } | null = null;
   /** What happens to the selected pair after a restart: a fresh local candidate (`auto`) or nothing (`never`). */
   restartBehaviour: "auto" | "never" = "auto";
   signalingState = "stable";
@@ -243,6 +259,37 @@ export class FakePeerConnection {
       });
       if (!this.statsWithoutTransport) {
         reports.set("transport-0", { id: "transport-0", type: "transport", selectedCandidatePairId: pairId });
+      }
+      const quality = this.qualityStats;
+      if (quality) {
+        const pair = reports.get(pairId) as Record<string, unknown> | undefined;
+        if (pair && quality.currentRoundTripTime !== undefined) {
+          pair.currentRoundTripTime = quality.currentRoundTripTime;
+          // Stale failed pairs can also report RTT; samples must ignore them.
+          const stale = reports.get(`${pairId}-stale`) as Record<string, unknown> | undefined;
+          if (stale) stale.currentRoundTripTime = quality.currentRoundTripTime + 0.5;
+        }
+        reports.set("inbound-0", {
+          id: "inbound-0",
+          type: "inbound-rtp",
+          ...(quality.jitter !== undefined ? { jitter: quality.jitter } : {}),
+          ...(quality.packetsLost !== undefined ? { packetsLost: quality.packetsLost } : {}),
+          ...(quality.packetsReceived !== undefined ? { packetsReceived: quality.packetsReceived } : {}),
+          ...(quality.bytesReceived !== undefined ? { bytesReceived: quality.bytesReceived } : {}),
+          ...(quality.framesDropped !== undefined ? { framesDropped: quality.framesDropped } : {}),
+          ...(quality.frameWidth !== undefined ? { frameWidth: quality.frameWidth } : {}),
+          ...(quality.frameHeight !== undefined ? { frameHeight: quality.frameHeight } : {}),
+          ...(quality.mimeType ? { codecId: "codec-0" } : {}),
+        });
+        reports.set("outbound-0", {
+          id: "outbound-0",
+          type: "outbound-rtp",
+          ...(quality.bytesSent !== undefined ? { bytesSent: quality.bytesSent } : {}),
+          ...(quality.mimeType ? { codecId: "codec-0" } : {}),
+        });
+        if (quality.mimeType) {
+          reports.set("codec-0", { id: "codec-0", type: "codec", mimeType: quality.mimeType });
+        }
       }
     }
     return reports;

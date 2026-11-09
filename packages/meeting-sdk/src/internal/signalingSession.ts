@@ -38,6 +38,7 @@ export const PEER_OUTBOUND_TYPES = Object.freeze([
   "webrtc.connected",
   "webrtc.disconnected",
   "webrtc.failed",
+  "webrtc.quality_sample",
   "webrtc.ice_restart",
   "webrtc.ice_restart_result",
 ] as const satisfies readonly MessageType[]);

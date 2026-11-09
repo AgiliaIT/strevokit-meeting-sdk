@@ -50,6 +50,16 @@ test("connectivity-server pushes are server-only and restart results are client-
   }
 });
 
+test("quality samples are client-to-server only", () => {
+  assert.equal(
+    parseSignalingMessage(validEnvelope("webrtc.quality_sample"), { direction: "client_to_server" }).ok,
+    true,
+  );
+  const result = parseSignalingMessage(validEnvelope("webrtc.quality_sample"), { direction: "server_to_client" });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.code, "direction_not_allowed");
+});
+
 test("the server cannot emit client-only requests", () => {
   const result = parseSignalingMessage(validEnvelope("participant.join"), { direction: "server_to_client" });
   assert.equal(result.ok, false);

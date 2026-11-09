@@ -55,6 +55,25 @@ export type PayloadMap = {
   "webrtc.failed": PeerPayload & {
     reason: ReasonCode<"ice_failed" | "negotiation_failed" | "timeout">;
   };
+  "webrtc.quality_sample": PeerPayload & {
+    connectionState: ReasonCode<"connecting" | "connected" | "disconnected" | "failed" | "interrupted">;
+    sampledAt: string;
+    rttMs?: number;
+    jitterMs?: number;
+    packetLossRatio?: number;
+    sendBitrateBps?: number;
+    receiveBitrateBps?: number;
+    iceLocalCandidateType?: string;
+    iceRemoteCandidateType?: string;
+    path?: MediaPath;
+    localPath?: MediaPath;
+    remotePath?: MediaPath;
+    framesDropped?: number;
+    frameWidth?: number;
+    frameHeight?: number;
+    codec?: string;
+    incomplete?: boolean;
+  };
   "webrtc.ice_restart": { targetParticipantId: string };
   "webrtc.ice_restart_result": PeerPayload & { outcome: IceRestartOutcome };
   "media.camera.started": EmptyPayload;

@@ -173,6 +173,16 @@ export type PeerReport = {
   reason?: string;
 };
 
+export type QualitySampleReport = {
+  from: string;
+  peerParticipantId: string;
+  connectionState: string;
+  sampledAt: string;
+  incomplete?: boolean;
+  rttMs?: number;
+  path?: string;
+};
+
 export type PresentParticipant = {
   participantId: string;
   role?: Role;
@@ -202,6 +212,8 @@ export class FakeRealtime {
   welcomeIceServersExpireAt: string | undefined;
   /** Media connection reports received from clients, in order. */
   readonly peerReports: PeerReport[] = [];
+  /** Quality samples received from clients, in order (not relayed). */
+  readonly qualitySamples: QualitySampleReport[] = [];
   /** Every relayed or dropped `webrtc.offer|answer|ice_candidate|ice_restart` frame, in order. */
   readonly peerFrames: { from: string; to: string; type: string; delivered: boolean }[] = [];
   /** `webrtc.ice_restart_result` frames received from clients, in order. */
@@ -509,6 +521,23 @@ export class FakeRealtime {
         };
         if (message.type === "webrtc.failed") report.reason = message.payload.reason;
         this.peerReports.push(report);
+        return;
+      }
+      case "webrtc.quality_sample": {
+        if (!socket.joined) {
+          this.#reject(socket, "not_joined");
+          return;
+        }
+        const payload = message.payload;
+        this.qualitySamples.push({
+          from: token.participantId,
+          peerParticipantId: payload.peerParticipantId,
+          connectionState: payload.connectionState,
+          sampledAt: payload.sampledAt,
+          ...(payload.incomplete !== undefined ? { incomplete: payload.incomplete } : {}),
+          ...(payload.rttMs !== undefined ? { rttMs: payload.rttMs } : {}),
+          ...(payload.path !== undefined ? { path: payload.path } : {}),
+        });
         return;
       }
       case "webrtc.ice_restart_result": {

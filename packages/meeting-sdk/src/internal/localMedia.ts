@@ -224,10 +224,14 @@ export class LocalMediaController {
     }
   }
 
-  /** A capture the browser or device ended (unplugged, revoked, "Stop sharing") turns that kind off and is announced. */
+  /**
+   * A capture the browser or device ended. A live camera or unmuted microphone continues on another listed
+   * device of that kind when one can be opened. Otherwise the kind turns off and is announced. Screen share
+   * always turns off. A muted microphone is dropped and is not replaced.
+   */
   #watchEnded(kind: MediaKind, stream: MediaStream): void {
     const onEnded = (): void => {
-      if (this.#streams[kind] !== stream) return;
+      if (this.#released || this.#streams[kind] !== stream) return;
       if (!this.#state[kind]) {
         // A muted microphone that ended is dropped, so the next unmute captures again.
         if (kind === "microphone") {
@@ -236,9 +240,80 @@ export class LocalMediaController {
         }
         return;
       }
-      this.#log.info(kind === "screen" ? "screen share ended by the browser" : "capture ended", { kind });
-      this.set(kind, false).catch(() => undefined);
+      if (kind === "screen") {
+        this.#log.info("screen share ended by the browser", { kind });
+        this.set(kind, false).catch(() => undefined);
+        return;
+      }
+      const generation = this.#generation;
+      const scheduled = this.#tails[kind].then(() => this.#continueOnAnotherDevice(kind, stream, generation));
+      this.#tails[kind] = scheduled.then(
+        () => undefined,
+        () => undefined,
+      );
     };
     for (const track of stream.getTracks()) track.addEventListener("ended", onEnded, { once: true });
+  }
+
+  /** The capture that just ended is still the one in use, and the meeting has not been released. */
+  #stillCurrent(kind: MediaKind, stream: MediaStream, generation: number): boolean {
+    return !this.#released && this.#generation === generation && this.#state[kind] && this.#streams[kind] === stream;
+  }
+
+  /**
+   * Opens the first remaining device of `kind` and installs it the same way as a live switch. When none can be
+   * opened, turns `kind` off. A release or a newer capture during the attempt stops the new stream and emits nothing.
+   */
+  async #continueOnAnotherDevice(kind: "camera" | "microphone", endedStream: MediaStream, generation: number): Promise<void> {
+    if (!this.#stillCurrent(kind, endedStream, generation)) return;
+    const endedId = this.#devices[kind] ?? deviceOf(endedStream, undefined);
+    const candidates = await this.#otherDevices(kind, endedId);
+    if (!this.#stillCurrent(kind, endedStream, generation)) return;
+    for (const deviceId of candidates) {
+      if (!this.#stillCurrent(kind, endedStream, generation)) return;
+      let stream: MediaStream;
+      try {
+        stream = await this.#capture(kind, deviceId);
+      } catch {
+        continue;
+      }
+      if (!this.#stillCurrent(kind, endedStream, generation)) {
+        stopTracks(stream);
+        return;
+      }
+      this.#streams[kind] = stream;
+      this.#devices[kind] = deviceOf(stream, deviceId);
+      this.#watchEnded(kind, stream);
+      this.#hooks.changed(kind, true, stream);
+      stopTracks(endedStream);
+      this.#log.info("capture continued on another device", { kind, reason: "capture_fallback" });
+      return;
+    }
+    if (!this.#stillCurrent(kind, endedStream, generation)) return;
+    this.#log.info("capture ended", { kind });
+    try {
+      this.#turnOff(kind, true);
+    } catch {
+      // The meeting is already gone; the new capture was never installed.
+    }
+  }
+
+  /** Listed devices of `kind`, excluding the one that just ended and any empty id. */
+  async #otherDevices(kind: "camera" | "microphone", endedId: string | null): Promise<string[]> {
+    const devices = this.#env.mediaDevices;
+    if (typeof devices?.enumerateDevices !== "function") return [];
+    let listed: readonly { readonly deviceId: string; readonly kind: string }[];
+    try {
+      listed = await devices.enumerateDevices();
+    } catch {
+      return [];
+    }
+    const wanted = kind === "camera" ? "videoinput" : "audioinput";
+    const ids: string[] = [];
+    for (const device of listed) {
+      if (device.kind !== wanted || !device.deviceId || device.deviceId === endedId || ids.includes(device.deviceId)) continue;
+      ids.push(device.deviceId);
+    }
+    return ids;
   }
 }

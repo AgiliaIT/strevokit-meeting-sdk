@@ -172,6 +172,7 @@ describe("peer media › local tracks", () => {
     const { low, high, lowId } = await joinedPair(h);
     const { lowPc } = connections(h);
     const track = cameraTrack(low);
+    h.media.devices.camera = [track.deviceId ?? "camera-1"];
     track.endFromBrowser();
     await settle();
     expect(low.localMediaState.camera).toBe(false);
@@ -180,10 +181,36 @@ describe("peer media › local tracks", () => {
     expect(high.participants.find((p) => p.id === lowId)?.media.camera).toBe(false);
   });
 
+  it("hands an ended camera to the connection without renegotiating when another camera is listed", async () => {
+    const { low, high, lowId } = await joinedPair(h);
+    const { lowPc } = connections(h);
+    const first = cameraTrack(low);
+    const offers = sentPeerFrames(h, lowId).filter((frame) => frame.type === "webrtc.offer");
+    const lowEvents = recordEvents(low);
+    const highEvents = recordEvents(high);
+    first.endFromBrowser();
+    await settle();
+    const camera = cameraTrack(low);
+    expect(low.localMediaState.camera).toBe(true);
+    expect(camera.deviceId).toBe("camera-2");
+    expect(camera).not.toBe(first);
+    expect(videoSender(lowPc).replaceCalls).toEqual([first, camera]);
+    expect(videoSender(lowPc).track).toBe(camera);
+    expect(sentPeerFrames(h, lowId).filter((frame) => frame.type === "webrtc.offer")).toEqual(offers);
+    expect(high.remoteMedia(lowId).camera).not.toBeNull();
+    expect(high.participants.find((participant) => participant.id === lowId)?.media.camera).toBe(true);
+    expect(eventsOfType(lowEvents, "participant_left")).toEqual([]);
+    expect(eventsOfType(lowEvents, "participant_joined")).toEqual([]);
+    expect(eventsOfType(highEvents, "participant_left")).toEqual([]);
+    expect(eventsOfType(highEvents, "participant_joined")).toEqual([]);
+  });
+
   it("a microphone that ends unexpectedly turns off, is announced, and is captured again on unmute", async () => {
     const { low, high, lowId } = await joinedPair(h);
     const { lowPc } = connections(h);
-    microphoneTrack(low).endFromBrowser();
+    const track = microphoneTrack(low);
+    h.media.devices.microphone = [track.deviceId ?? "mic-1"];
+    track.endFromBrowser();
     await settle();
     expect(low.localMediaState.microphone).toBe(false);
     expect(high.participants.find((p) => p.id === lowId)?.media.microphone).toBe(false);
@@ -253,6 +280,7 @@ describe("local media › ended captures in a signaling-only meeting", () => {
     await engine.join();
     await engine.enableCamera();
     const events = recordEvents(engine);
+    h.media.devices.camera = ["camera-1"];
     cameraTrack(engine).endFromBrowser();
     await settle();
     expect(engine.localMedia.camera).toBeNull();

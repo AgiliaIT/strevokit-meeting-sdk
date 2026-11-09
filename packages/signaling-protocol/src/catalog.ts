@@ -16,6 +16,7 @@ const CATALOG = {
   "webrtc.connected": { family: "webrtc", direction: "client_to_server" },
   "webrtc.disconnected": { family: "webrtc", direction: "client_to_server" },
   "webrtc.failed": { family: "webrtc", direction: "client_to_server" },
+  "webrtc.quality_sample": { family: "webrtc", direction: "client_to_server" },
   "webrtc.ice_restart": { family: "webrtc", direction: "both" },
   "webrtc.ice_restart_result": { family: "webrtc", direction: "client_to_server" },
   "media.camera.started": { family: "media", direction: "both" },

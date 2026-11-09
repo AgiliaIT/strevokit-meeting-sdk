@@ -12,10 +12,17 @@ export interface SocketLike {
 
 export type SocketConstructor = new (url: string, protocols: string[]) => SocketLike;
 
+/** A listed capture device. Only the fields the engine reads are required. */
+export interface MediaDeviceInfoLike {
+  readonly deviceId: string;
+  readonly kind: string;
+}
+
 /** The subset of `navigator.mediaDevices` the engine uses. */
 export interface MediaDevicesLike {
   getUserMedia?(constraints: MediaStreamConstraints): Promise<MediaStream>;
   getDisplayMedia?(options?: DisplayMediaStreamOptions): Promise<MediaStream>;
+  enumerateDevices?(): Promise<readonly MediaDeviceInfoLike[]>;
 }
 
 export type TimerHandle = unknown;
@@ -46,6 +53,18 @@ export type StatsReportLike = {
   readonly candidateType?: string;
   readonly state?: string;
   readonly nominated?: boolean;
+  readonly currentRoundTripTime?: number;
+  readonly roundTripTime?: number;
+  readonly jitter?: number;
+  readonly packetsLost?: number;
+  readonly packetsReceived?: number;
+  readonly bytesSent?: number;
+  readonly bytesReceived?: number;
+  readonly framesDropped?: number;
+  readonly frameWidth?: number;
+  readonly frameHeight?: number;
+  readonly mimeType?: string;
+  readonly codecId?: string;
 };
 
 /** The subset of `RTCStatsReport` the engine uses. */

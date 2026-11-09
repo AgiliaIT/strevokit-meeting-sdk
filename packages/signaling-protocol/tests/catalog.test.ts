@@ -22,6 +22,7 @@ const EXPECTED = {
     "webrtc.connected",
     "webrtc.disconnected",
     "webrtc.failed",
+    "webrtc.quality_sample",
     "webrtc.ice_restart",
     "webrtc.ice_restart_result",
   ],
@@ -49,6 +50,7 @@ const EXPECTED_DIRECTIONS: Record<string, string> = {
   "webrtc.connected": "client_to_server",
   "webrtc.disconnected": "client_to_server",
   "webrtc.failed": "client_to_server",
+  "webrtc.quality_sample": "client_to_server",
   "webrtc.ice_restart": "both",
   "webrtc.ice_restart_result": "client_to_server",
   "media.camera.started": "both",
@@ -67,9 +69,9 @@ const EXPECTED_DIRECTIONS: Record<string, string> = {
   "session.ice_servers": "server_to_client",
 };
 
-test("catalog contains exactly the 27 v1 types", () => {
+test("catalog contains exactly the 28 v1 types", () => {
   const expected = Object.values(EXPECTED).flat();
-  assert.equal(MESSAGE_TYPES.length, 27);
+  assert.equal(MESSAGE_TYPES.length, 28);
   assert.deepEqual([...MESSAGE_TYPES].sort(), [...expected].sort());
 });
 

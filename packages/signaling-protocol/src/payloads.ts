@@ -7,6 +7,9 @@ import {
   MAX_ICE_SERVER_URLS,
   MAX_ICE_SERVER_USERNAME_LENGTH,
   MAX_ICE_SERVERS,
+  MAX_QUALITY_CANDIDATE_TYPE_LENGTH,
+  MAX_QUALITY_CODEC_LENGTH,
+  MAX_QUALITY_FRAME_DIMENSION,
   MAX_REASON_LENGTH,
   MAX_SDP_BYTES,
   MAX_SDP_MID_LENGTH,
@@ -223,6 +226,101 @@ function sessionWelcome(p: Obj): Obj {
   return value;
 }
 
+function optionalNonNegativeNumber(obj: Obj, key: string, path: string, value: Obj): void {
+  if (!hasOwn(obj, key)) return;
+  const raw = obj[key];
+  if (typeof raw !== "number" || !Number.isFinite(raw)) fail("wrong_type", path);
+  if (raw < 0) fail("out_of_range", path);
+  value[key] = raw;
+}
+
+function optionalUnitInterval(obj: Obj, key: string, path: string, value: Obj): void {
+  if (!hasOwn(obj, key)) return;
+  const raw = obj[key];
+  if (typeof raw !== "number" || !Number.isFinite(raw)) fail("wrong_type", path);
+  if (raw < 0 || raw > 1) fail("out_of_range", path);
+  value[key] = raw;
+}
+
+function optionalNonNegativeInt(obj: Obj, key: string, path: string, value: Obj): void {
+  if (!hasOwn(obj, key)) return;
+  const raw = obj[key];
+  if (typeof raw !== "number" || !Number.isFinite(raw)) fail("wrong_type", path);
+  if (!Number.isInteger(raw) || raw < 0) fail("out_of_range", path);
+  value[key] = raw;
+}
+
+function optionalPositiveInt(obj: Obj, key: string, path: string, max: number, value: Obj): void {
+  if (!hasOwn(obj, key)) return;
+  const raw = obj[key];
+  if (typeof raw !== "number" || !Number.isFinite(raw)) fail("wrong_type", path);
+  if (!Number.isInteger(raw) || raw < 1 || raw > max) fail("out_of_range", path);
+  value[key] = raw;
+}
+
+function looksLikeSdpOrCandidateDump(value: string): boolean {
+  if (value.includes("\r\n") || value.includes("\n")) return true;
+  if (/^v=0/i.test(value)) return true;
+  if (/^candidate:/i.test(value)) return true;
+  if (/\bIN IP[46]\b/i.test(value)) return true;
+  return false;
+}
+
+function optionalShortToken(
+  obj: Obj,
+  key: string,
+  path: string,
+  maxLength: number,
+  value: Obj,
+): void {
+  if (!hasOwn(obj, key)) return;
+  const raw = obj[key];
+  if (typeof raw !== "string") fail("wrong_type", path);
+  if (raw.length === 0 || raw.length > maxLength) fail(raw.length === 0 ? "invalid_format" : "too_long", path);
+  if (looksLikeSdpOrCandidateDump(raw)) fail("invalid_format", path);
+  if (!/^[a-zA-Z0-9._+/-]+$/.test(raw)) fail("invalid_format", path);
+  value[key] = raw;
+}
+
+const qualitySample: Validator = (p, ctx) => {
+  const value: Obj = {
+    ...peer(p, ctx),
+    connectionState: reasonCode(p, "connectionState", "payload.connectionState"),
+    sampledAt: timestamp(p, "sampledAt", "payload.sampledAt"),
+  };
+  optionalNonNegativeNumber(p, "rttMs", "payload.rttMs", value);
+  optionalNonNegativeNumber(p, "jitterMs", "payload.jitterMs", value);
+  optionalUnitInterval(p, "packetLossRatio", "payload.packetLossRatio", value);
+  optionalNonNegativeNumber(p, "sendBitrateBps", "payload.sendBitrateBps", value);
+  optionalNonNegativeNumber(p, "receiveBitrateBps", "payload.receiveBitrateBps", value);
+  optionalShortToken(
+    p,
+    "iceLocalCandidateType",
+    "payload.iceLocalCandidateType",
+    MAX_QUALITY_CANDIDATE_TYPE_LENGTH,
+    value,
+  );
+  optionalShortToken(
+    p,
+    "iceRemoteCandidateType",
+    "payload.iceRemoteCandidateType",
+    MAX_QUALITY_CANDIDATE_TYPE_LENGTH,
+    value,
+  );
+  for (const key of ["path", "localPath", "remotePath"] as const) {
+    if (hasOwn(p, key)) value[key] = reasonCode(p, key, `payload.${key}`);
+  }
+  optionalNonNegativeInt(p, "framesDropped", "payload.framesDropped", value);
+  optionalPositiveInt(p, "frameWidth", "payload.frameWidth", MAX_QUALITY_FRAME_DIMENSION, value);
+  optionalPositiveInt(p, "frameHeight", "payload.frameHeight", MAX_QUALITY_FRAME_DIMENSION, value);
+  optionalShortToken(p, "codec", "payload.codec", MAX_QUALITY_CODEC_LENGTH, value);
+  if (hasOwn(p, "incomplete")) {
+    if (typeof p.incomplete !== "boolean") fail("wrong_type", "payload.incomplete");
+    value.incomplete = p.incomplete;
+  }
+  return value;
+};
+
 const VALIDATORS: Record<MessageType, Validator> = {
   "participant.join": empty,
   "participant.joined": (p) => optionalDisplayName(p, { role: role(p) }),
@@ -247,6 +345,7 @@ const VALIDATORS: Record<MessageType, Validator> = {
     ...peer(p, ctx),
     reason: reasonCode(p, "reason", "payload.reason"),
   }),
+  "webrtc.quality_sample": qualitySample,
   "webrtc.ice_restart": (p, ctx) => ({
     targetParticipantId: participantRef(p, "targetParticipantId", "payload.targetParticipantId", ctx, false),
   }),

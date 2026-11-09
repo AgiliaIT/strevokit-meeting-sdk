@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { MeetingEngine } from "../src/public/types.js";
+import type { MeetingEngine, MeetingLogger } from "../src/public/types.js";
 import type { FakeTrack } from "./support/fakeMediaDevices.js";
 import { flush } from "./support/fakeRealtime.js";
 import { type EngineHarness, createP2PHarness, eventsOfType, recordEvents } from "./support/harness.js";
@@ -397,5 +397,121 @@ describe("release", () => {
     await engine.leave();
     expect(engine.state).toBe("closed");
     expect(h.media.liveTracks()).toBe(0);
+  });
+});
+
+describe("capture ended fallback", () => {
+  function recordingLogger(): { logger: MeetingLogger; lines: string[] } {
+    const lines: string[] = [];
+    const record = (message: string, fields?: unknown): void => {
+      lines.push(`${message} ${JSON.stringify(fields ?? {})}`);
+    };
+    return { logger: { debug: record, info: record, warn: record, error: record }, lines };
+  }
+
+  it("continues a live camera on another listed camera without an on/off announcement", async () => {
+    const { logger, lines } = recordingLogger();
+    const engine = h.createEngine({ role: "host", logger });
+    await engine.join();
+    await engine.enableCamera();
+    const before = h.media.latestTrack("camera") as FakeTrack;
+    const events = recordEvents(engine);
+    h.media.simulateBrowserStop("camera");
+    await flush();
+    const after = h.media.latestTrack("camera") as FakeTrack;
+    expect(engine.localMediaState.camera).toBe(true);
+    expect(after.deviceId).toBe("camera-2");
+    expect(after).not.toBe(before);
+    expect(before.readyState).toBe("ended");
+    expect(engine.localMedia.camera?.getVideoTracks()[0]).toBe(after);
+    expect(sentMedia(engine)).toEqual(["media.camera.started"]);
+    expect(eventsOfType(events, "local_media_changed")).toEqual([
+      { kind: "camera", enabled: true, stream: engine.localMedia.camera },
+    ]);
+    const logged = lines.join("\n");
+    expect(logged).toContain("capture_fallback");
+    expect(logged).not.toMatch(/camera-[12]|mic-/);
+  });
+
+  it("turns the camera off and announces it when no other camera is listed", async () => {
+    const engine = await joinedHost();
+    await engine.enableCamera();
+    h.media.devices.camera = ["camera-1"];
+    const events = recordEvents(engine);
+    h.media.simulateBrowserStop("camera");
+    await flush();
+    expect(engine.localMediaState.camera).toBe(false);
+    expect(engine.localMedia.camera).toBeNull();
+    expect(sentMedia(engine)).toEqual(["media.camera.started", "media.camera.stopped"]);
+    expect(eventsOfType(events, "local_media_changed")).toEqual([{ kind: "camera", enabled: false, stream: null }]);
+  });
+
+  it("turns the camera off when every other listed camera fails to capture", async () => {
+    const { logger, lines } = recordingLogger();
+    const engine = h.createEngine({ role: "host", logger });
+    await engine.join();
+    await engine.enableCamera();
+    h.media.failNext("camera", "NotFoundError");
+    const events = recordEvents(engine);
+    h.media.simulateBrowserStop("camera");
+    await flush();
+    expect(engine.localMediaState.camera).toBe(false);
+    expect(eventsOfType(events, "local_media_changed")).toEqual([{ kind: "camera", enabled: false, stream: null }]);
+    expect(sentMedia(engine)).toContain("media.camera.stopped");
+    const logged = lines.join("\n");
+    expect(logged).toContain("device_not_found");
+    expect(logged).not.toMatch(/camera-[12]/);
+  });
+
+  it("does not unmute or recapture when a muted microphone track ends", async () => {
+    const engine = await joinedHost();
+    await engine.unmute();
+    await engine.mute();
+    const calls = h.media.calls.getUserMedia;
+    const events = recordEvents(engine);
+    h.media.simulateBrowserStop("microphone");
+    await flush();
+    expect(engine.localMediaState.microphone).toBe(false);
+    expect(h.media.calls.getUserMedia).toBe(calls);
+    expect(eventsOfType(events, "local_media_changed")).toEqual([]);
+    expect(sentMedia(engine)).toEqual(["media.microphone.started", "media.microphone.stopped"]);
+  });
+
+  it("stops a fallback capture when the meeting is released while it is in flight", async () => {
+    const engine = await joinedHost();
+    await engine.enableCamera();
+    const release = h.media.holdNext("camera");
+    const events = recordEvents(engine);
+    h.media.simulateBrowserStop("camera");
+    await flush();
+    expect(h.media.calls.getUserMedia).toBe(2);
+    await engine.leave();
+    release();
+    await flush();
+    expect(h.media.liveTracks()).toBe(0);
+    expect(eventsOfType(events, "local_media_changed").filter((event) => event.enabled)).toEqual([]);
+  });
+
+  it("rejects enableCamera and unmute while reconnecting without capturing", async () => {
+    const engine = h.createEngine({ role: "host", reconnectWindowMs: 1_000 });
+    await engine.join();
+    const calls = h.media.calls.getUserMedia;
+    h.realtime.holdWelcome = true;
+    h.realtime.dropWithoutClose();
+    await flush();
+    expect(engine.state).toBe("reconnecting");
+    await expect(engine.enableCamera()).rejects.toMatchObject({ code: "not_joined" });
+    await expect(engine.unmute()).rejects.toMatchObject({ code: "not_joined" });
+    expect(h.media.calls.getUserMedia).toBe(calls);
+  });
+
+  it("leaves an active screen share on after a camera switch", async () => {
+    const engine = await joinedHost();
+    await engine.startScreenShare();
+    await engine.enableCamera({ deviceId: "camera-1" });
+    await engine.enableCamera({ deviceId: "camera-2" });
+    expect(engine.localMediaState.screen).toBe(true);
+    expect(engine.localMedia.screen).not.toBeNull();
+    expect(h.media.liveTracks("screen")).toBe(1);
   });
 });

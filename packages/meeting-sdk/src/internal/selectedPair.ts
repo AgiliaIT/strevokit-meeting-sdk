@@ -3,18 +3,28 @@ import type { PeerConnectionLike, StatsReportLike } from "./env.js";
 export type SelectedPair = { readonly localId: string; readonly localType: string; readonly remoteType: string };
 
 /**
+ * The candidate-pair report the browser is sending media over: transport.selectedCandidatePairId first, then the
+ * succeeded and nominated pair for browsers without that field.
+ */
+export function selectedCandidatePairReport(reports: readonly StatsReportLike[]): StatsReportLike | undefined {
+  const byId = new Map(reports.map((report) => [report.id, report]));
+  const selectedId = reports.find((r) => r.type === "transport" && r.selectedCandidatePairId)?.selectedCandidatePairId;
+  return (
+    (selectedId ? byId.get(selectedId) : undefined) ??
+    reports.find((r) => r.type === "candidate-pair" && r.state === "succeeded" && r.nominated === true)
+  );
+}
+
+/**
  * The candidate pair the browser is sending media over, from its stats: the transport's selected pair first, then
  * the succeeded and nominated pair for browsers without that field. Null when stats are unavailable or incomplete.
  */
 export async function selectedPair(pc: PeerConnectionLike): Promise<SelectedPair | null> {
   const reports = await statsOf(pc);
   if (!reports) return null;
-  const byId = new Map(reports.map((report) => [report.id, report]));
-  const selectedId = reports.find((r) => r.type === "transport" && r.selectedCandidatePairId)?.selectedCandidatePairId;
-  const pair =
-    (selectedId ? byId.get(selectedId) : undefined) ??
-    reports.find((r) => r.type === "candidate-pair" && r.state === "succeeded" && r.nominated === true);
+  const pair = selectedCandidatePairReport(reports);
   if (!pair?.localCandidateId || !pair.remoteCandidateId) return null;
+  const byId = new Map(reports.map((report) => [report.id, report]));
   const localType = byId.get(pair.localCandidateId)?.candidateType;
   const remoteType = byId.get(pair.remoteCandidateId)?.candidateType;
   if (!localType || !remoteType) return null;

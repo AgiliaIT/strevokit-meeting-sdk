@@ -1,6 +1,6 @@
 {
   "name": "@strevokit/signaling-protocol",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Versioned realtime signaling contract shared by the Strevokit realtime service and meeting SDK.",
   "private": true,
   "type": "module",

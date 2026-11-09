@@ -186,6 +186,40 @@ describe("log hygiene", () => {
     expect(calls).toEqual([{ level: "info", message: "probe", fields: { state: "joined", kind: "camera" } }]);
   });
 
+  it("allows numeric quality sample keys and still strips dump-like strings", () => {
+    const calls: Call[] = [];
+    const log = new Log(capturingLogger(calls));
+    log.debug("webrtc quality sample", {
+      participantId: "01JQDDDDDDDDDDDDDDDDDDDDDD",
+      state: "connected",
+      rttMs: 40,
+      jitterMs: 2,
+      packetLossRatio: 0.01,
+      sendBitrateBps: 1000,
+      receiveBitrateBps: 900,
+      path: "direct",
+      incomplete: true,
+      sdp: "v=0",
+    });
+    expect(calls).toEqual([
+      {
+        level: "debug",
+        message: "webrtc quality sample",
+        fields: {
+          participantId: "01JQDDDDDDDDDDDDDDDDDDDDDD",
+          state: "connected",
+          rttMs: 40,
+          jitterMs: 2,
+          packetLossRatio: 0.01,
+          sendBitrateBps: 1000,
+          receiveBitrateBps: 900,
+          path: "direct",
+          incomplete: true,
+        },
+      },
+    ]);
+  });
+
   it("never throws when the logger throws", () => {
     const log = new Log({
       info() {

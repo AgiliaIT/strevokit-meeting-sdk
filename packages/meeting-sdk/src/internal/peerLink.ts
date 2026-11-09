@@ -1,7 +1,15 @@
 import type { IceCandidate, IceServerConfig, PayloadMap } from "@strevokit/signaling-protocol";
 import type { EngineEnvironment, IceCandidateLike, PeerConnectionLike, TimerHandle, TransceiverLike } from "./env.js";
 import type { Log } from "./log.js";
+import {
+  QUALITY_SAMPLE_INTERVAL_MS,
+  type QualityByteSnapshot,
+  type QualitySample,
+  buildQualitySample,
+} from "./qualitySample.js";
 import { localCandidateIds, type PathReport, pathReport, samePath, selectedPair } from "./selectedPair.js";
+
+export { QUALITY_SAMPLE_INTERVAL_MS } from "./qualitySample.js";
 
 /** Remote candidates kept until the remote description is set. */
 export const MAX_QUEUED_CANDIDATES = 64;
@@ -48,6 +56,8 @@ export interface PeerLinkCallbacks {
   switchResult(outcome: SwitchOutcome): void;
   /** An offerer started a restart because the connection was interrupted. */
   recoveryStarted(trigger: RecoveryTrigger): void;
+  /** Periodic media-health sample while the link is alive. Failures must not tear down media. */
+  qualitySample(sample: QualitySample): void;
 }
 
 /** A planned move to fresh candidates before the credentials in use expire. */
@@ -133,6 +143,9 @@ export class PeerLink {
   #remoteOrigin: string | undefined;
   #lastReport: PathReport | null = null;
   #recheckTimer: TimerHandle | undefined;
+  #qualityTimer: TimerHandle | undefined;
+  #qualityBytes: QualityByteSnapshot | null = null;
+  #qualityRunning = false;
 
   /** Throws when the connection cannot be created; the owner treats that as a negotiation failure. */
   constructor(options: PeerLinkOptions) {
@@ -380,6 +393,7 @@ export class PeerLink {
     this.#clearInterruptionHold();
     this.#clearRestartHold();
     this.#clearRecheck();
+    this.#stopQualitySampler();
     this.#pc.onicecandidate = null;
     this.#pc.onconnectionstatechange = null;
     this.#pc.oniceconnectionstatechange = null;
@@ -603,6 +617,7 @@ export class PeerLink {
         this.#clearTimer();
         this.#clearInterruptionHold();
         if (this.#setStatus("connected")) void this.#reportPath();
+        this.#startQualitySampler();
         return;
       case "disconnected":
         if (!this.#everConnected) return;
@@ -615,6 +630,7 @@ export class PeerLink {
           return;
         }
         this.#setStatus("interrupted");
+        this.#startQualitySampler();
         return;
       case "failed":
         this.#fail("connection_failed");
@@ -622,6 +638,64 @@ export class PeerLink {
       default:
         return;
     }
+  }
+
+  #qualityConnectionState(): string {
+    if (this.#status === "interrupted") return "interrupted";
+    if (this.#status === "failed") return "failed";
+    if (this.#status === "connected") return "connected";
+    return "connecting";
+  }
+
+  #startQualitySampler(): void {
+    if (this.#closed || this.#qualityRunning) return;
+    this.#qualityRunning = true;
+    this.#scheduleQualitySample();
+  }
+
+  #stopQualitySampler(): void {
+    this.#qualityRunning = false;
+    if (this.#qualityTimer !== undefined) this.#env.clearTimeout(this.#qualityTimer);
+    this.#qualityTimer = undefined;
+    this.#qualityBytes = null;
+  }
+
+  #scheduleQualitySample(): void {
+    if (!this.#qualityRunning || this.#closed) return;
+    this.#qualityTimer = this.#env.setTimeout(() => {
+      this.#qualityTimer = undefined;
+      void this.#emitQualitySample();
+    }, QUALITY_SAMPLE_INTERVAL_MS);
+  }
+
+  async #emitQualitySample(): Promise<void> {
+    if (!this.#qualityRunning || this.#closed) return;
+    try {
+      const result = await buildQualitySample(this.#pc, {
+        connectionState: this.#qualityConnectionState(),
+        nowMs: this.#env.now(),
+        previous: this.#qualityBytes,
+      });
+      if (this.#closed || !this.#qualityRunning) return;
+      this.#qualityBytes = result.bytes;
+      this.#log.debug("webrtc quality sample", {
+        participantId: this.peerId,
+        state: result.sample.connectionState,
+        ...(result.sample.rttMs !== undefined ? { rttMs: result.sample.rttMs } : {}),
+        ...(result.sample.jitterMs !== undefined ? { jitterMs: result.sample.jitterMs } : {}),
+        ...(result.sample.packetLossRatio !== undefined ? { packetLossRatio: result.sample.packetLossRatio } : {}),
+        ...(result.sample.sendBitrateBps !== undefined ? { sendBitrateBps: result.sample.sendBitrateBps } : {}),
+        ...(result.sample.receiveBitrateBps !== undefined
+          ? { receiveBitrateBps: result.sample.receiveBitrateBps }
+          : {}),
+        ...(result.sample.path ? { path: result.sample.path } : {}),
+        ...(result.sample.incomplete ? { incomplete: true } : {}),
+      });
+      this.#callbacks.qualitySample(result.sample);
+    } catch {
+      // Sampling must never affect media.
+    }
+    if (!this.#closed && this.#qualityRunning) this.#scheduleQualitySample();
   }
 
   /** True when the status changed. */

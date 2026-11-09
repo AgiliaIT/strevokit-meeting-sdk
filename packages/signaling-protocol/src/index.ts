@@ -11,6 +11,9 @@ export {
   MAX_ICE_SERVER_URL_LENGTH,
   MAX_ICE_SERVER_USERNAME_LENGTH,
   MAX_ICE_SERVER_CREDENTIAL_LENGTH,
+  MAX_QUALITY_CODEC_LENGTH,
+  MAX_QUALITY_CANDIDATE_TYPE_LENGTH,
+  MAX_QUALITY_FRAME_DIMENSION,
 } from "./limits.js";
 export { REJECTION_CODES, REJECTION_DETAILS, SignalingProtocolError } from "./rejection.js";
 export type { RejectionCode, RejectionDetail, SignalingRejection } from "./rejection.js";

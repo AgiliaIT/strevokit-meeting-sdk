@@ -52,11 +52,11 @@ test("protocol and package versions are declared", () => {
   const pkgUrl = new URL("../../package.json", import.meta.url);
   const pkg = JSON.parse(readFileSync(pkgUrl, "utf8")) as { version: string; name: string; dependencies?: object };
   assert.equal(pkg.name, "@strevokit/signaling-protocol");
-  assert.equal(pkg.version, "1.6.0");
+  assert.equal(pkg.version, "1.7.0");
   assert.equal(pkg.dependencies, undefined, "package must have no runtime dependencies");
 });
 
-test("changelog has 1.0.0 through 1.6.0 entries", () => {
+test("changelog has 1.0.0 through 1.7.0 entries", () => {
   const changelog = readFileSync(new URL("../../CHANGELOG.md", import.meta.url), "utf8");
   assert.match(changelog, /^## \[1\.0\.0\]/m);
   assert.match(changelog, /^## \[1\.1\.0\]/m);
@@ -65,6 +65,7 @@ test("changelog has 1.0.0 through 1.6.0 entries", () => {
   assert.match(changelog, /^## \[1\.4\.0\]/m);
   assert.match(changelog, /^## \[1\.5\.0\]/m);
   assert.match(changelog, /^## \[1\.6\.0\]/m);
+  assert.match(changelog, /^## \[1\.7\.0\]/m);
 });
 
 test("1.4.0-era welcome and connected messages are still accepted by 1.5.0", () => {

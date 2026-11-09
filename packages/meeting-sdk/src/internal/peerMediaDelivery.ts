@@ -327,6 +327,14 @@ export class PeerMediaDelivery implements MediaDelivery {
               context.send("webrtc.ice_restart_result", { peerParticipantId: peerId, outcome });
             }
           },
+          qualitySample: (sample) => {
+            if (this.#link !== link) return;
+            try {
+              context.send("webrtc.quality_sample", { peerParticipantId: peerId, ...sample });
+            } catch {
+              // Send failure must not tear down media.
+            }
+          },
         },
       });
     } catch {

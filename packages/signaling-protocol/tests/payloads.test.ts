@@ -109,6 +109,9 @@ test("missing required fields are rejected with the field path", () => {
       "payload.candidate.sdpMLineIndex",
     ],
     ["webrtc.connected", {}, "payload.peerParticipantId"],
+    ["webrtc.quality_sample", { connectionState: "connected", sampledAt: "2026-09-28T10:00:30.000Z" }, "payload.peerParticipantId"],
+    ["webrtc.quality_sample", { peerParticipantId: BOB, sampledAt: "2026-09-28T10:00:30.000Z" }, "payload.connectionState"],
+    ["webrtc.quality_sample", { peerParticipantId: BOB, connectionState: "connected" }, "payload.sampledAt"],
     ["webrtc.disconnected", {}, "payload.peerParticipantId"],
     ["webrtc.failed", { peerParticipantId: BOB }, "payload.reason"],
     ["meeting.started", {}, "payload.startedAt"],
@@ -597,4 +600,78 @@ test("meeting.end accepts an empty payload and drops undocumented fields", () =>
     ),
   );
   assert.deepEqual(extra.payload, {});
+});
+
+test("webrtc.quality_sample accepts required fields and bounded optional measures", () => {
+  const full = {
+    peerParticipantId: BOB,
+    connectionState: "connected",
+    sampledAt: "2026-09-28T10:00:30.000Z",
+    rttMs: 40,
+    jitterMs: 2,
+    packetLossRatio: 0,
+    sendBitrateBps: 1000,
+    receiveBitrateBps: 900,
+    iceLocalCandidateType: "relay",
+    iceRemoteCandidateType: "host",
+    path: "relayed",
+    localPath: "relayed",
+    remotePath: "direct",
+    framesDropped: 3,
+    frameWidth: 640,
+    frameHeight: 360,
+    codec: "audio/opus",
+    incomplete: true,
+  };
+  assert.deepEqual(expectOk(parseSignalingMessage(envelope("webrtc.quality_sample", full))).payload, full);
+
+  const stripped = expectOk(
+    parseSignalingMessage(
+      envelope("webrtc.quality_sample", {
+        ...full,
+        sdp: SMALL_SDP,
+        statsDump: [{ type: "inbound-rtp" }],
+        displayName: "Alice",
+      }),
+    ),
+  );
+  assert.deepEqual(stripped.payload, full);
+});
+
+test("webrtc.quality_sample rejects out-of-range and dump-like values", () => {
+  const base = {
+    peerParticipantId: BOB,
+    connectionState: "connected",
+    sampledAt: "2026-09-28T10:00:30.000Z",
+  };
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.quality_sample", { ...base, packetLossRatio: -0.1 })),
+    "out_of_range",
+    "payload.packetLossRatio",
+  );
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.quality_sample", { ...base, rttMs: -1 })),
+    "out_of_range",
+    "payload.rttMs",
+  );
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.quality_sample", { ...base, frameWidth: 0 })),
+    "out_of_range",
+    "payload.frameWidth",
+  );
+  expectPayloadError(
+    parseSignalingMessage(
+      envelope("webrtc.quality_sample", {
+        ...base,
+        iceLocalCandidateType: "candidate:1",
+      }),
+    ),
+    "invalid_format",
+    "payload.iceLocalCandidateType",
+  );
+  expectPayloadError(
+    parseSignalingMessage(envelope("webrtc.quality_sample", { ...base, incomplete: "yes" })),
+    "wrong_type",
+    "payload.incomplete",
+  );
 });

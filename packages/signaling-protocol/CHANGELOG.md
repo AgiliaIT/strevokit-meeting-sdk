@@ -5,6 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-08
+
+Additive under the compatibility policy. `PROTOCOL_VERSION` stays `1`, and every 1.6.0 message is unchanged.
+
+### Added
+
+- `webrtc.quality_sample` (client to server, not relayed): required `peerParticipantId`, `connectionState`, and `sampledAt` (RFC 3339 UTC); optional RTT/jitter/loss/bitrates, ICE candidate types, path fields, frames/resolution/codec, and `incomplete`. Validators reject out-of-range numerics and SDP/candidate-like dumps in short string fields.
+- Length caps `MAX_QUALITY_CODEC_LENGTH`, `MAX_QUALITY_CANDIDATE_TYPE_LENGTH`, and `MAX_QUALITY_FRAME_DIMENSION`.
+- Conformance and payload fixtures for valid samples, malformed values, and `direction_not_allowed` for server→client.
+
 ## [1.6.0] - 2026-10-15
 
 Additive under the compatibility policy. `PROTOCOL_VERSION` stays `1`, and every 1.5.0 message is unchanged.

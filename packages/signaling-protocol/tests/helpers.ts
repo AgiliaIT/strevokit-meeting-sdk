@@ -30,6 +30,11 @@ export const VALID_PAYLOADS: { [K in MessageType]: PayloadMap[K] } = {
   "webrtc.connected": { peerParticipantId: BOB },
   "webrtc.disconnected": { peerParticipantId: BOB },
   "webrtc.failed": { peerParticipantId: BOB, reason: "ice_failed" },
+  "webrtc.quality_sample": {
+    peerParticipantId: BOB,
+    connectionState: "connected",
+    sampledAt: "2026-09-28T10:00:30.000Z",
+  },
   "webrtc.ice_restart": { targetParticipantId: BOB },
   "webrtc.ice_restart_result": { peerParticipantId: BOB, outcome: "completed" },
   "media.camera.started": {},

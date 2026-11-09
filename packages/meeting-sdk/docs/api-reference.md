@@ -131,6 +131,12 @@ microphone) to `enableCamera()` or `unmute()`. Without one, the browser's defaul
 | Muted, with another device kept open | `unmute({ deviceId })` | The chosen microphone is captured and announced; the previous one is released. |
 | Unmuted with another device | `unmute({ deviceId })` | Switches in place, as for the camera. |
 
+If the camera or an unmuted microphone ends on its own, and another device of that kind is listed, capture continues
+on that device. `local_media_changed` fires with the kind still on and the new stream. The change is not announced as
+stopped or started. When no other device can be opened, the kind turns off and is announced. A muted microphone that
+ends is not replaced and is not unmuted. Calls made while the engine is `reconnecting` reject with `not_joined` and
+do not capture.
+
 If the chosen device is missing, the call rejects with `device_not_found`; if another app is using it, with
 `device_unavailable`. Either way, the device already in use keeps running. A pending call is shared only by calls for
 the same state **and** the same device. Device IDs are never logged. Read the device in use from the track:
@@ -281,6 +287,8 @@ it; otherwise `null`.
 | `connected` | Audio and video are flowing. |
 | `interrupted` | The connection dropped after working; it may recover on its own. |
 | `failed` | The connection could not be set up or did not recover. An `error` event with `media_connection_failed` accompanies it. Rejoining starts a new attempt. |
+
+While a peer link is alive, the SDK may periodically report aggregated media-health samples (RTT, jitter, loss, bitrates, and path/connectivity indicators) to the realtime service for operator diagnostics. Sampling failures never tear down media.
 
 ### `ParticipantLeftReason`
 

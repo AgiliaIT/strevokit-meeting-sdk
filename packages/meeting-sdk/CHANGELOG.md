@@ -6,6 +6,16 @@ All notable changes to `@strevokit/meeting-sdk` are documented here. The format 
 
 ## [Unreleased]
 
+## [0.8.0]
+
+Bundles `@strevokit/signaling-protocol` 1.6.0.
+
+### Changed
+
+- A live camera or microphone whose capture ends may continue on another device of that kind. The kind stays on, and
+  the change is not announced as stopped or started. When no other device of that kind can be opened, the kind turns
+  off and is announced as before.
+
 ## [0.7.0]
 
 Bundles `@strevokit/signaling-protocol` 1.6.0.
